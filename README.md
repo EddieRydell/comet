@@ -38,6 +38,18 @@ You can also make denser clips:
 uv run comet generate --count 4 --source-count-min 8 --source-count-max 12
 ```
 
+For training datasets with minimal disk use, write a single root with only mono mixes, metadata, and a manifest:
+
+```powershell
+uv run comet generate --count 10000 --seed 100000 --out data/generated/train_10k --training-layout --no-stems --no-preview
+```
+
+That layout is:
+
+- `audio/clip_0000.wav`
+- `metadata/clip_0000.json`
+- `manifest.jsonl`
+
 ## Current Instrument Parameters
 
 The generator writes each source's randomized `synth_parameters` and `effect_parameters` into `metadata.json`.
@@ -63,7 +75,7 @@ When a clip contains multiple tracks of the same `source_type`, each duplicate g
 
 `fm_growl` and `wub_bass` use a lower bass note pool, are limited to at most one growl/wub layer per clip, and use short controlled event lengths so they do not blanket the recording. Plucks are bright, transient-heavy, and mixed much louder than the original v0 defaults so they remain audible in denser clips.
 
-Common production parameters include `drive`, `duck_amount`, `duck_release_seconds`, plus delay and reverb parameters on compatible sources.
+Common production parameters include `drive`, `duck_amount`, and `duck_release_seconds`. Delay and reverb are intentionally excluded from default training renders so the audio does not contain unlabeled echo or tail events.
 
 Each clip directory contains:
 

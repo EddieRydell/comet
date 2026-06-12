@@ -165,6 +165,21 @@ def test_synth_metadata_does_not_use_lfo_modulation(tmp_path: Path) -> None:
                 assert not any(fragment in key for fragment in banned_fragments)
 
 
+def test_effect_metadata_does_not_use_delay_or_reverb(tmp_path: Path) -> None:
+    config = GeneratorConfig(
+        sample_rate=22_050,
+        duration_seconds=8.0,
+        source_count_min=10,
+        source_count_max=10,
+    )
+    metadata = generate_clip(tmp_path / "clip", seed=145, config=config)
+    banned_fragments = ("delay", "reverb", "room_size")
+
+    for source in metadata.sources:
+        for key in source.effect_parameters:
+            assert not any(fragment in key for fragment in banned_fragments)
+
+
 def test_event_timbre_varies_within_sources(tmp_path: Path) -> None:
     config = GeneratorConfig(
         sample_rate=22_050,
@@ -297,3 +312,37 @@ def test_batch_writes_manifest_and_preview(tmp_path: Path) -> None:
         assert row["time_signature"] in {"2/2", "3/4", "3/2", "7/4", "5/4", "2/4", "4/4"}
         assert row["source_count"] >= 4
         assert row["event_count"] > 0
+
+
+def test_training_layout_writes_mix_metadata_and_manifest_only(tmp_path: Path) -> None:
+    config = GeneratorConfig(sample_rate=22_050, duration_seconds=2.0)
+    clips = generate_batch(
+        tmp_path / "training",
+        count=2,
+        seed=200,
+        config=config,
+        write_preview=False,
+        write_stems=False,
+        flat_layout=True,
+    )
+
+    root = tmp_path / "training"
+    rows = [
+        json.loads(line)
+        for line in (root / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert len(clips) == 2
+    assert len(rows) == 2
+    assert not (root / "preview.html").exists()
+    assert not (root / "visualizer.html").exists()
+    assert not (root / "stems").exists()
+    for index, row in enumerate(rows):
+        clip_id = f"clip_{index:04d}"
+        assert row["mix_path"] == f"audio/{clip_id}.wav"
+        assert row["metadata_path"] == f"metadata/{clip_id}.json"
+        assert (root / row["mix_path"]).exists()
+        assert (root / row["metadata_path"]).exists()
+        metadata = json.loads((root / row["metadata_path"]).read_text(encoding="utf-8"))
+        assert metadata["paths"]["mix"] == row["mix_path"]
+        assert metadata["paths"]["metadata"] == row["metadata_path"]

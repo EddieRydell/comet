@@ -15,13 +15,11 @@ from comet_audio.dsp import (
     adsr_envelope,
     butter_filter,
     db_to_amp,
-    delay,
     midi_to_hz,
     normalize_peak,
     one_pole_decay,
     saturate,
     sidechain_duck,
-    simple_reverb,
     soft_limiter,
 )
 from comet_audio.models import (
@@ -74,6 +72,8 @@ def generate_batch(
     seed: int,
     config: GeneratorConfig | None = None,
     write_preview: bool = True,
+    write_stems: bool = True,
+    flat_layout: bool = False,
 ) -> list[ClipMetadata]:
     config = config or GeneratorConfig()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -85,16 +85,28 @@ def generate_batch(
             clip_seed = int(seed + index)
             clip_id = f"clip_{index:04d}"
             clip_dir = out_dir / clip_id
-            metadata = generate_clip(clip_dir, clip_seed, config)
+            metadata = generate_clip(
+                clip_dir,
+                clip_seed,
+                config,
+                clip_id=clip_id,
+                dataset_root=out_dir,
+                write_stems=write_stems,
+                flat_layout=flat_layout,
+            )
             clips.append(metadata)
+            manifest_mix_path = metadata.paths["mix"] if flat_layout else f"{clip_id}/mix.wav"
+            manifest_metadata_path = (
+                metadata.paths["metadata"] if flat_layout else f"{clip_id}/metadata.json"
+            )
             entry = BatchManifestEntry(
                 clip_id=clip_id,
                 seed=metadata.seed,
                 bpm=metadata.bpm,
                 time_signature=metadata.time_signature,
                 key=metadata.key,
-                mix_path=f"{clip_id}/mix.wav",
-                metadata_path=f"{clip_id}/metadata.json",
+                mix_path=manifest_mix_path,
+                metadata_path=manifest_metadata_path,
                 source_count=len(metadata.sources),
                 event_count=len(metadata.events),
             )
@@ -109,12 +121,36 @@ def generate_clip(
     clip_dir: Path,
     seed: int,
     config: GeneratorConfig | None = None,
+    clip_id: str | None = None,
+    dataset_root: Path | None = None,
+    write_stems: bool = True,
+    flat_layout: bool = False,
 ) -> ClipMetadata:
     config = config or GeneratorConfig()
     rng = np.random.default_rng(seed)
-    clip_dir.mkdir(parents=True, exist_ok=True)
-    stem_dir = clip_dir / "stems"
-    stem_dir.mkdir(exist_ok=True)
+    clip_id = clip_id or clip_dir.name
+    dataset_root = dataset_root or clip_dir.parent
+    if flat_layout:
+        audio_dir = dataset_root / "audio"
+        metadata_dir = dataset_root / "metadata"
+        stem_dir = dataset_root / "stems" / clip_id
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+        mix_path = audio_dir / f"{clip_id}.wav"
+        metadata_path = metadata_dir / f"{clip_id}.json"
+        relative_mix_path = f"audio/{clip_id}.wav"
+        relative_metadata_path = f"metadata/{clip_id}.json"
+        relative_stems_path = f"stems/{clip_id}"
+    else:
+        clip_dir.mkdir(parents=True, exist_ok=True)
+        stem_dir = clip_dir / "stems"
+        mix_path = clip_dir / "mix.wav"
+        metadata_path = clip_dir / "metadata.json"
+        relative_mix_path = "mix.wav"
+        relative_metadata_path = "metadata.json"
+        relative_stems_path = "stems"
+    if write_stems:
+        stem_dir.mkdir(parents=True, exist_ok=True)
 
     if config.bpm_min > config.bpm_max:
         raise ValueError("bpm_min must be less than or equal to bpm_max")
@@ -129,7 +165,7 @@ def generate_clip(
     bass_note_pool = _minor_note_pool(key_index, root_octave_midi=24, octave_count=2)
     lead_note_pool = _minor_note_pool(key_index, root_octave_midi=48, octave_count=2)
 
-    sources = _make_sources(rng, chosen_types)
+    sources = _make_sources(rng, chosen_types, stem_prefix=relative_stems_path)
     events = _make_events(
         rng,
         sources,
@@ -164,13 +200,16 @@ def generate_clip(
             )
         wet = normalize_peak(wet, peak=0.95)
         stems[source.source_id] = wet
-        sf.write(stem_dir / Path(source.stem_path).name, wet, config.sample_rate, subtype="PCM_16")
+        if write_stems:
+            sf.write(
+                stem_dir / Path(source.stem_path).name, wet, config.sample_rate, subtype="PCM_16"
+            )
 
     mix = np.zeros(int(round(config.sample_rate * config.duration_seconds)), dtype=np.float32)
     for stem in stems.values():
         mix += stem
     mix = soft_limiter(mix, ceiling=0.98)
-    sf.write(clip_dir / "mix.wav", mix, config.sample_rate, subtype="PCM_16")
+    sf.write(mix_path, mix, config.sample_rate, subtype="PCM_16")
 
     metadata = ClipMetadata(
         seed=seed,
@@ -181,11 +220,15 @@ def generate_clip(
         beats_per_measure=beats_per_measure,
         beat_unit=beat_unit,
         key=key,
-        paths={"mix": "mix.wav", "metadata": "metadata.json", "stems": "stems"},
+        paths={
+            "mix": relative_mix_path,
+            "metadata": relative_metadata_path,
+            "stems": relative_stems_path,
+        },
         sources=sources,
         events=sorted(events, key=lambda event: (event.onset_seconds, event.event_id)),
     )
-    (clip_dir / "metadata.json").write_text(
+    metadata_path.write_text(
         json.dumps(metadata.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
@@ -400,7 +443,9 @@ def _minor_note_pool(key_index: int, root_octave_midi: int, octave_count: int) -
     ]
 
 
-def _make_sources(rng: np.random.Generator, chosen_types: list[SourceType]) -> list[SourceMetadata]:
+def _make_sources(
+    rng: np.random.Generator, chosen_types: list[SourceType], stem_prefix: str = "stems"
+) -> list[SourceMetadata]:
     sources = []
     type_counts = {
         source_type: sum(1 for chosen_type in chosen_types if chosen_type == source_type)
@@ -440,7 +485,7 @@ def _make_sources(rng: np.random.Generator, chosen_types: list[SourceType]) -> l
                 ),
                 gain_db=round(gain, 3),
                 pan=round(pan, 3),
-                stem_path=f"stems/{source_id}.wav",
+                stem_path=f"{stem_prefix}/{source_id}.wav",
             )
         )
     return sources
@@ -593,13 +638,6 @@ def _effect_parameters(
         "duck_amount": 0.0 if source_type == "kick" else float(rng.uniform(0.18, 0.55)),
         "duck_release_seconds": float(rng.uniform(0.16, 0.32)),
     }
-    if source_type in {"snare_clap", "pluck_stab", "riser_impact"}:
-        params["reverb_mix"] = float(rng.uniform(0.08, 0.24))
-        params["room_size"] = float(rng.uniform(0.45, 0.9))
-    if source_type in {"pluck_stab", "fm_bass", "fm_growl", "wub_bass"}:
-        params["delay_seconds"] = float(rng.choice([0.125, 0.1875, 0.25]))
-        params["delay_feedback"] = float(rng.uniform(0.12, 0.28))
-        params["delay_mix"] = float(rng.uniform(0.04, 0.14))
     return {
         key: round(value, 4) if isinstance(value, float) else value for key, value in params.items()
     }
@@ -1177,21 +1215,6 @@ def _apply_source_effects(
         out = butter_filter(out, sample_rate, 4800.0, "lowpass", order=2)
     if source.source_type == "riser_impact":
         out = butter_filter(out, sample_rate, 5200.0, "highpass", order=1)
-    if "delay_seconds" in source.effect_parameters:
-        out = delay(
-            out,
-            sample_rate,
-            float(source.effect_parameters["delay_seconds"]),
-            float(source.effect_parameters["delay_feedback"]),
-            float(source.effect_parameters["delay_mix"]),
-        )
-    if "reverb_mix" in source.effect_parameters:
-        out = simple_reverb(
-            out,
-            sample_rate,
-            float(source.effect_parameters["room_size"]),
-            float(source.effect_parameters["reverb_mix"]),
-        )
     return out.astype(np.float32)
 
 
