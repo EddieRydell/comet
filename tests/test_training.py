@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from comet_audio.generator import GeneratorConfig, generate_batch
+from comet_audio.generator import SOURCE_TYPES, GeneratorConfig, generate_batch
 from comet_audio.models import BatchManifestEntry
 from comet_audio.training import (
     HOP_LENGTH,
@@ -52,7 +52,7 @@ def test_dataset_loads_manifest_audio_and_metadata(tmp_path: Path) -> None:
         count=2,
         seed=300,
         config=config,
-        write_preview=False,
+        write_visualizer=False,
         write_stems=False,
         flat_layout=True,
     )
@@ -66,7 +66,7 @@ def test_dataset_loads_manifest_audio_and_metadata(tmp_path: Path) -> None:
     assert metadata.sample_rate == SAMPLE_RATE
     assert sample["waveform"].shape == (SAMPLE_RATE,)
     assert sample["onset"].shape == (frame_count(SAMPLE_RATE),)
-    assert sample["source_onset"].shape == (8, frame_count(SAMPLE_RATE))
+    assert sample["source_onset"].shape == (len(SOURCE_TYPES), frame_count(SAMPLE_RATE))
 
 
 def test_split_logic_returns_exact_10k_manifest_order_counts() -> None:
@@ -87,7 +87,7 @@ def test_target_builder_aligns_timestamps_to_frames(tmp_path: Path) -> None:
         count=1,
         seed=301,
         config=config,
-        write_preview=False,
+        write_visualizer=False,
         write_stems=False,
         flat_layout=True,
     )
@@ -98,9 +98,8 @@ def test_target_builder_aligns_timestamps_to_frames(tmp_path: Path) -> None:
     assert set(targets) == {
         "onset",
         "attack",
-        "sustain",
+        "held",
         "release",
-        "active",
         "source_onset",
         "onset_offset",
         "onset_offset_mask",
@@ -112,9 +111,8 @@ def test_target_builder_aligns_timestamps_to_frames(tmp_path: Path) -> None:
             assert abs(peak_frame - onset_frame) <= 1
             break
     assert targets["attack"].shape == targets["onset"].shape
-    assert targets["sustain"].shape == targets["onset"].shape
+    assert targets["held"].shape == targets["onset"].shape
     assert targets["release"].shape == targets["onset"].shape
-    assert targets["active"].shape == targets["onset"].shape
 
 
 def test_model_forward_returns_all_heads_with_expected_time_dimension() -> None:
@@ -125,10 +123,9 @@ def test_model_forward_returns_all_heads_with_expected_time_dimension() -> None:
 
     assert outputs["onset"].shape == (2, expected_time)
     assert outputs["attack"].shape == (2, expected_time)
-    assert outputs["sustain"].shape == (2, expected_time)
+    assert outputs["held"].shape == (2, expected_time)
     assert outputs["release"].shape == (2, expected_time)
-    assert outputs["active"].shape == (2, expected_time)
-    assert outputs["source_onset"].shape == (2, 8, expected_time)
+    assert outputs["source_onset"].shape == (2, len(SOURCE_TYPES), expected_time)
     assert outputs["onset_offset"].shape == (2, expected_time)
 
 
@@ -139,7 +136,7 @@ def test_one_tiny_cpu_training_step_computes_finite_loss_and_updates(tmp_path: P
         count=2,
         seed=302,
         config=config,
-        write_preview=False,
+        write_visualizer=False,
         write_stems=False,
         flat_layout=True,
     )

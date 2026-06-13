@@ -9,7 +9,17 @@ from typing import Any
 
 import numpy as np
 import soundfile as sf
+from scipy import signal
 
+from comet_audio.assets import (
+    AssetCatalog,
+    AssetEntry,
+    choose_sfz_region,
+    load_asset_catalog,
+    load_mono_wav,
+    parse_sfz,
+)
+from comet_audio.dawdreamer_renderer import render_dawdreamer_source
 from comet_audio.dsp import (
     TAU,
     adsr_envelope,
@@ -36,23 +46,109 @@ DEFAULT_TIME_SIGNATURES = ("2/2", "3/4", "3/2", "7/4", "5/4", "2/4", "4/4")
 RHYTHM_SUBDIVISIONS = (2, 3, 4, 6, 8)
 SOURCE_TYPES: list[SourceType] = [
     "kick",
-    "snare_clap",
-    "hat_noise",
-    "fm_bass",
-    "fm_growl",
-    "wub_bass",
-    "pluck_stab",
-    "riser_impact",
+    "snare",
+    "clap",
+    "closed_hat",
+    "open_hat",
+    "cymbal",
+    "tom",
+    "percussion",
+    "synth_bass",
+    "electric_bass",
+    "acoustic_bass",
+    "piano",
+    "electric_piano",
+    "organ",
+    "guitar_pluck",
+    "guitar_strum",
+    "mallet",
+    "string_stab",
+    "brass_stab",
+    "synth_lead",
+    "synth_pluck",
+    "pad_chord",
+    "riser",
+    "impact",
+    "noise_sweep",
 ]
 OPTIONAL_SOURCE_POOL: list[SourceType] = [
-    "hat_noise",
-    "fm_bass",
-    "fm_growl",
-    "wub_bass",
-    "pluck_stab",
-    "pluck_stab",
-    "riser_impact",
+    "open_hat",
+    "percussion",
+    "synth_bass",
+    "electric_bass",
+    "acoustic_bass",
+    "synth_lead",
+    "synth_pluck",
+    "pad_chord",
+    "mallet",
+    "string_stab",
+    "brass_stab",
+    "riser",
+    "impact",
+    "noise_sweep",
 ]
+PERCUSSION_SOURCE_TYPES: tuple[SourceType, ...] = (
+    "kick",
+    "snare",
+    "clap",
+    "closed_hat",
+    "open_hat",
+    "cymbal",
+    "tom",
+    "percussion",
+)
+PERCUSSION_RHYTHM_TEMPLATES = (
+    "straight",
+    "half_time",
+    "breakbeat",
+    "two_step",
+    "triplet",
+    "sparse",
+    "fills",
+    "solo_hits",
+    "dense_hats",
+    "foley",
+)
+PROCEDURAL_RECIPE_BY_SOURCE_TYPE: dict[str, str] = {
+    "kick": "kick",
+    "snare": "snare_clap",
+    "clap": "snare_clap",
+    "closed_hat": "hat_noise",
+    "open_hat": "hat_noise",
+    "cymbal": "hat_noise",
+    "tom": "kick",
+    "percussion": "snare_clap",
+    "synth_bass": "fm_bass",
+    "electric_bass": "fm_bass",
+    "acoustic_bass": "fm_bass",
+    "synth_lead": "pluck_stab",
+    "synth_pluck": "pluck_stab",
+    "pad_chord": "pluck_stab",
+    "piano": "pluck_stab",
+    "electric_piano": "pluck_stab",
+    "organ": "pluck_stab",
+    "guitar_pluck": "pluck_stab",
+    "guitar_strum": "pluck_stab",
+    "mallet": "pluck_stab",
+    "string_stab": "pluck_stab",
+    "brass_stab": "pluck_stab",
+    "riser": "riser_impact",
+    "impact": "riser_impact",
+    "noise_sweep": "riser_impact",
+}
+FAMILY_BY_SOURCE_TYPE: dict[str, str] = {
+    **{
+        name: "drums"
+        for name in ("kick", "snare", "clap", "closed_hat", "open_hat", "cymbal", "tom")
+    },
+    "percussion": "percussion",
+    "synth_bass": "bass",
+    "electric_bass": "bass",
+    "acoustic_bass": "bass",
+    "riser": "fx",
+    "impact": "fx",
+    "noise_sweep": "fx",
+}
 
 
 @dataclass(frozen=True)
@@ -64,6 +160,12 @@ class GeneratorConfig:
     time_signatures: tuple[str, ...] = DEFAULT_TIME_SIGNATURES
     source_count_min: int = 5
     source_count_max: int = 10
+    renderer_profile: str = "hybrid_v1"
+    procedural_fallback: bool = True
+    asset_catalog: AssetCatalog | None = None
+    include_tags: tuple[str, ...] = ()
+    exclude_tags: tuple[str, ...] = ()
+    composition_profile: str = "edm_v1"
 
 
 def generate_batch(
@@ -71,11 +173,32 @@ def generate_batch(
     count: int,
     seed: int,
     config: GeneratorConfig | None = None,
-    write_preview: bool = True,
+    write_visualizer: bool = True,
     write_stems: bool = True,
     flat_layout: bool = False,
+    assets: Path | None = None,
+    renderer_profile: str = "hybrid_v1",
+    procedural_fallback: bool = True,
+    include_tags: tuple[str, ...] = (),
+    exclude_tags: tuple[str, ...] = (),
 ) -> list[ClipMetadata]:
     config = config or GeneratorConfig()
+    if assets is not None or config.asset_catalog is None:
+        config = GeneratorConfig(
+            sample_rate=config.sample_rate,
+            duration_seconds=config.duration_seconds,
+            bpm_min=config.bpm_min,
+            bpm_max=config.bpm_max,
+            time_signatures=config.time_signatures,
+            source_count_min=config.source_count_min,
+            source_count_max=config.source_count_max,
+            renderer_profile=renderer_profile,
+            procedural_fallback=procedural_fallback,
+            asset_catalog=load_asset_catalog(assets),
+            include_tags=include_tags,
+            exclude_tags=exclude_tags,
+            composition_profile=config.composition_profile,
+        )
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = out_dir / "manifest.jsonl"
     clips: list[ClipMetadata] = []
@@ -112,8 +235,8 @@ def generate_batch(
             )
             manifest.write(entry.model_dump_json() + "\n")
 
-    if write_preview:
-        write_preview_html(out_dir, clips)
+    if write_visualizer:
+        write_visualizer_html(out_dir, clips)
     return clips
 
 
@@ -125,8 +248,39 @@ def generate_clip(
     dataset_root: Path | None = None,
     write_stems: bool = True,
     flat_layout: bool = False,
+    assets: Path | None = None,
+    renderer_profile: str | None = None,
+    procedural_fallback: bool | None = None,
+    include_tags: tuple[str, ...] | None = None,
+    exclude_tags: tuple[str, ...] | None = None,
 ) -> ClipMetadata:
     config = config or GeneratorConfig()
+    if (
+        assets is not None
+        or renderer_profile is not None
+        or procedural_fallback is not None
+        or include_tags is not None
+        or exclude_tags is not None
+    ):
+        config = GeneratorConfig(
+            sample_rate=config.sample_rate,
+            duration_seconds=config.duration_seconds,
+            bpm_min=config.bpm_min,
+            bpm_max=config.bpm_max,
+            time_signatures=config.time_signatures,
+            source_count_min=config.source_count_min,
+            source_count_max=config.source_count_max,
+            renderer_profile=renderer_profile or config.renderer_profile,
+            procedural_fallback=(
+                config.procedural_fallback if procedural_fallback is None else procedural_fallback
+            ),
+            asset_catalog=load_asset_catalog(assets)
+            if assets is not None
+            else config.asset_catalog,
+            include_tags=config.include_tags if include_tags is None else include_tags,
+            exclude_tags=config.exclude_tags if exclude_tags is None else exclude_tags,
+            composition_profile=config.composition_profile,
+        )
     rng = np.random.default_rng(seed)
     clip_id = clip_id or clip_dir.name
     dataset_root = dataset_root or clip_dir.parent
@@ -161,11 +315,20 @@ def generate_clip(
     if config.source_count_min > config.source_count_max:
         raise ValueError("source_count_min must be less than or equal to source_count_max")
     source_count = int(rng.integers(config.source_count_min, config.source_count_max + 1))
-    chosen_types = _choose_sources(rng, source_count)
+    chosen_types = _choose_sources(rng, source_count, config)
     bass_note_pool = _minor_note_pool(key_index, root_octave_midi=24, octave_count=2)
     lead_note_pool = _minor_note_pool(key_index, root_octave_midi=48, octave_count=2)
 
-    sources = _make_sources(rng, chosen_types, stem_prefix=relative_stems_path)
+    sources = _make_sources(
+        rng,
+        chosen_types,
+        stem_prefix=relative_stems_path,
+        catalog=config.asset_catalog,
+        renderer_profile=config.renderer_profile,
+        procedural_fallback=config.procedural_fallback,
+        include_tags=config.include_tags,
+        exclude_tags=config.exclude_tags,
+    )
     events = _make_events(
         rng,
         sources,
@@ -175,6 +338,7 @@ def generate_clip(
         bass_note_pool,
         lead_note_pool,
         config.duration_seconds,
+        composition_profile=config.composition_profile,
     )
 
     stems: dict[str, np.ndarray] = {}
@@ -212,6 +376,7 @@ def generate_clip(
     sf.write(mix_path, mix, config.sample_rate, subtype="PCM_16")
 
     metadata = ClipMetadata(
+        dataset_version="comet-edm-v1",
         seed=seed,
         sample_rate=config.sample_rate,
         duration_seconds=config.duration_seconds,
@@ -235,7 +400,7 @@ def generate_clip(
     return metadata
 
 
-def write_preview_html(out_dir: Path, clips: list[ClipMetadata]) -> None:
+def write_visualizer_html(out_dir: Path, clips: list[ClipMetadata]) -> None:
     payload = [
         {
             "clip_id": f"clip_{index:04d}",
@@ -254,8 +419,8 @@ def write_preview_html(out_dir: Path, clips: list[ClipMetadata]) -> None:
             "<title>Comet Audio Visualizer</title>",
             "<style>",
             ":root{color-scheme:dark;--bg:#101214;--panel:#191d21;--line:#303740;"
-            "--text:#f1f3f4;--muted:#a9b0b7;--attack:#f2bf5e;--sustain:#4dbf87;"
-            "--release:#5fa8e8;--onset:#f26d6d}",
+            "--text:#f1f3f4;--muted:#a9b0b7;--attack:#f2bf5e;--held:#4dbf87;"
+            "--release:#5fa8e8}",
             "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);"
             "font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}",
             "header{display:flex;align-items:center;justify-content:space-between;gap:16px;"
@@ -273,7 +438,7 @@ def write_preview_html(out_dir: Path, clips: list[ClipMetadata]) -> None:
             "audio{width:100%}.time{font-variant-numeric:tabular-nums;color:var(--muted);font-size:13px}",
             ".legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:12px}.key{display:flex;"
             "align-items:center;gap:6px}.swatch{width:12px;height:12px;border-radius:3px}.attack{background:var(--attack)}"
-            ".sustain{background:var(--sustain)}.release{background:var(--release)}.onset{background:var(--onset)}",
+            ".held{background:var(--held)}.release{background:var(--release)}",
             ".timeline{position:relative;border:1px solid var(--line);border-radius:8px;background:#131619;"
             "overflow:hidden}.ruler{height:32px;border-bottom:1px solid var(--line);display:grid;"
             "grid-template-columns:190px minmax(520px,1fr);background:#171b1f}.ruler-spacer{border-right:1px solid var(--line)}"
@@ -286,8 +451,7 @@ def write_preview_html(out_dir: Path, clips: list[ClipMetadata]) -> None:
             "margin-top:3px}.lane-track{position:relative;min-height:54px;background:#111417}",
             ".event{position:absolute;top:13px;height:26px;border-radius:5px;overflow:hidden;border:1px solid "
             "rgba(255,255,255,.16);display:flex;min-width:2px}.seg{height:100%;flex:0 0 auto}.seg.attack{"
-            "background:var(--attack)}.seg.sustain{background:var(--sustain)}.seg.release{background:var(--release)}"
-            ".onset-line{position:absolute;top:8px;bottom:8px;width:2px;background:var(--onset);z-index:2}",
+            "background:var(--attack)}.seg.held{background:var(--held)}.seg.release{background:var(--release)}",
             ".playhead{position:absolute;top:0;bottom:0;width:2px;background:#ffffff;box-shadow:0 0 0 1px #000;"
             "pointer-events:none;z-index:4}.empty{padding:24px;color:var(--muted)}",
             "@media(max-width:760px){header{align-items:stretch;flex-direction:column}.transport{grid-template-columns:1fr}"
@@ -308,9 +472,8 @@ def write_preview_html(out_dir: Path, clips: list[ClipMetadata]) -> None:
             '<section class="stats" id="stats"></section>',
             '<section class="transport"><audio id="audio" controls preload="metadata"></audio>'
             '<div class="time" id="timeReadout">0.000 / 0.000</div></section>',
-            '<section class="legend"><div class="key"><span class="swatch onset"></span>Onset</div>'
-            '<div class="key"><span class="swatch attack"></span>Attack</div>'
-            '<div class="key"><span class="swatch sustain"></span>Sustain</div>'
+            '<section class="legend"><div class="key"><span class="swatch attack"></span>Attack</div>'
+            '<div class="key"><span class="swatch held"></span>Held</div>'
             '<div class="key"><span class="swatch release"></span>Release</div></section>',
             '<section class="timeline" id="timeline"></section>',
             "</main>",
@@ -325,7 +488,7 @@ def write_preview_html(out_dir: Path, clips: list[ClipMetadata]) -> None:
             "const timeReadout=document.getElementById('timeReadout');",
             "const prevButton=document.getElementById('prevButton');",
             "const nextButton=document.getElementById('nextButton');",
-            "let currentIndex=0;let activeClip=null;let playhead=null;",
+            "let currentIndex=0;let selectedClip=null;let playhead=null;",
             "const sourceColors={kick:'#e16f64',snare_clap:'#d89547',hat_noise:'#b9b84d',fm_bass:'#45a86f',"
             "fm_growl:'#46a6a5',wub_bass:'#5b8fd8',pluck_stab:'#a16fd1',riser_impact:'#d36fa2'};",
             "function fmt(value){return Number(value).toFixed(3)}",
@@ -360,12 +523,11 @@ def write_preview_html(out_dir: Path, clips: list[ClipMetadata]) -> None:
             "const total=Math.max(0.001,end-start);const block=document.createElement('div');block.className='event';"
             "block.title=eventTitle(event);block.style.left=`${pct(start,duration)}%`;block.style.width="
             "`${Math.max(.35,pct(total,duration))}%`;block.style.borderColor=color;"
-            "const onset=document.createElement('div');onset.className='onset-line';onset.style.left=`${pct(start,duration)}%`;"
-            "track.appendChild(onset);const attack=document.createElement('div');attack.className='seg attack';"
-            "attack.style.width=`${((attackEnd-start)/total)*100}%`;const sustain=document.createElement('div');"
-            "sustain.className='seg sustain';sustain.style.width=`${((releaseStart-attackEnd)/total)*100}%`;"
+            "const attack=document.createElement('div');attack.className='seg attack';"
+            "attack.style.width=`${((attackEnd-start)/total)*100}%`;const held=document.createElement('div');"
+            "held.className='seg held';held.style.width=`${((releaseStart-attackEnd)/total)*100}%`;"
             "const release=document.createElement('div');release.className='seg release';release.style.width="
-            "`${((end-releaseStart)/total)*100}%`;block.append(attack,sustain,release);track.appendChild(block)}",
+            "`${((end-releaseStart)/total)*100}%`;block.append(attack,held,release);track.appendChild(block)}",
             "function renderLane(source,events,duration){const lane=document.createElement('div');lane.className='lane';"
             "const label=document.createElement('div');label.className='lane-label';label.innerHTML="
             "`<b>${sourceLabel(source)}</b><span>${events.length} events - gain ${source.gain_db} dB - pan ${source.pan}</span>`;"
@@ -375,10 +537,10 @@ def write_preview_html(out_dir: Path, clips: list[ClipMetadata]) -> None:
             "m.sources.forEach(source=>{const events=m.events.filter(event=>event.source_id===source.source_id);"
             "renderLane(source,events,m.duration_seconds)});playhead=document.createElement('div');"
             "playhead.className='playhead';playhead.style.left='0%';timeline.appendChild(playhead)}",
-            "function loadClip(index){currentIndex=(index+clips.length)%clips.length;activeClip=clips[currentIndex];"
-            "clipSelect.value=String(currentIndex);renderStats(activeClip);renderAudioOptions(activeClip);"
-            "renderTimeline(activeClip);updateTime()}",
-            "function updateTime(){const duration=activeClip?activeClip.metadata.duration_seconds:0;"
+            "function loadClip(index){currentIndex=(index+clips.length)%clips.length;selectedClip=clips[currentIndex];"
+            "clipSelect.value=String(currentIndex);renderStats(selectedClip);renderAudioOptions(selectedClip);"
+            "renderTimeline(selectedClip);updateTime()}",
+            "function updateTime(){const duration=selectedClip?selectedClip.metadata.duration_seconds:0;"
             "const current=audio.currentTime||0;timeReadout.textContent=`${fmt(current)} / ${fmt(duration)}`;"
             "if(playhead&&duration>0){const track=timeline.querySelector('.lane-track');"
             "if(track){const timelineRect=timeline.getBoundingClientRect();const trackRect=track.getBoundingClientRect();"
@@ -395,21 +557,56 @@ def write_preview_html(out_dir: Path, clips: list[ClipMetadata]) -> None:
             "</body></html>",
         ]
     )
-    (out_dir / "preview.html").write_text(html, encoding="utf-8")
     (out_dir / "visualizer.html").write_text(html, encoding="utf-8")
 
 
-def _choose_sources(rng: np.random.Generator, source_count: int) -> list[SourceType]:
-    required: list[SourceType] = ["kick", "snare_clap", "hat_noise", "fm_bass"]
+def _choose_sources(
+    rng: np.random.Generator, source_count: int, config: GeneratorConfig | None = None
+) -> list[SourceType]:
+    config = config or GeneratorConfig()
+    if config.composition_profile == "percussion_v1":
+        return _choose_percussion_sources(rng, source_count, config)
+    if config.composition_profile != "edm_v1":
+        raise ValueError("composition_profile must be one of: edm_v1, percussion_v1")
+    required: list[SourceType] = ["kick", "snare", "closed_hat", "synth_bass"]
     chosen = required[: min(source_count, len(required))]
     while len(chosen) < source_count:
         candidate = OPTIONAL_SOURCE_POOL[int(rng.integers(0, len(OPTIONAL_SOURCE_POOL)))]
-        if candidate in {"fm_growl", "wub_bass"} and any(
-            source in {"fm_growl", "wub_bass"} for source in chosen
+        if candidate in {"electric_bass", "acoustic_bass"} and any(
+            source in {"electric_bass", "acoustic_bass"} for source in chosen
         ):
             continue
         chosen.append(candidate)
     return chosen
+
+
+def _choose_percussion_sources(
+    rng: np.random.Generator, source_count: int, config: GeneratorConfig
+) -> list[SourceType]:
+    available = _available_percussion_source_types(config)
+    if not available:
+        raise ValueError("percussion_v1 requires at least one percussion source bucket")
+    anchors = [
+        source_type for source_type in ("kick", "snare", "closed_hat") if source_type in available
+    ]
+    chosen = anchors[: min(source_count, len(anchors))]
+    while len(chosen) < source_count:
+        chosen.append(str(rng.choice(available)))
+    rng.shuffle(chosen)
+    return list(chosen)
+
+
+def _available_percussion_source_types(config: GeneratorConfig) -> list[SourceType]:
+    if config.procedural_fallback or config.asset_catalog is None:
+        return list(PERCUSSION_SOURCE_TYPES)
+    available: list[SourceType] = []
+    for source_type in PERCUSSION_SOURCE_TYPES:
+        if any(
+            _asset_matches_tags(entry, config.include_tags, config.exclude_tags)
+            for entry in config.asset_catalog.candidates(source_type)
+        ):
+            available.append(source_type)
+    return available
 
 
 def _choose_time_signature(
@@ -444,42 +641,91 @@ def _minor_note_pool(key_index: int, root_octave_midi: int, octave_count: int) -
 
 
 def _make_sources(
-    rng: np.random.Generator, chosen_types: list[SourceType], stem_prefix: str = "stems"
+    rng: np.random.Generator,
+    chosen_types: list[SourceType],
+    stem_prefix: str = "stems",
+    catalog: AssetCatalog | None = None,
+    renderer_profile: str = "hybrid_v1",
+    procedural_fallback: bool = True,
+    include_tags: tuple[str, ...] = (),
+    exclude_tags: tuple[str, ...] = (),
 ) -> list[SourceMetadata]:
+    if renderer_profile not in {"hybrid_v1", "procedural_only", "plugin_v1"}:
+        raise ValueError("renderer_profile must be one of: hybrid_v1, procedural_only, plugin_v1")
     sources = []
     type_counts = {
         source_type: sum(1 for chosen_type in chosen_types if chosen_type == source_type)
         for source_type in set(chosen_types)
     }
     type_seen: dict[SourceType, int] = {}
+    used_asset_ids: set[str] = set()
     for index, source_type in enumerate(chosen_types):
         instance_index = type_seen.get(source_type, 0)
         type_seen[source_type] = instance_index + 1
-        gain = {
-            "kick": -3.5,
-            "snare_clap": -8.0,
-            "hat_noise": -13.0,
-            "fm_bass": -9.0,
-            "fm_growl": -17.0,
-            "wub_bass": -16.0,
-            "pluck_stab": -0.5,
-            "riser_impact": -14.0,
-        }[source_type] + float(rng.normal(0.0, 1.2))
+        asset = _choose_asset_for_source(
+            rng,
+            catalog,
+            source_type,
+            renderer_profile,
+            include_tags=include_tags,
+            exclude_tags=exclude_tags,
+            exclude_asset_ids=used_asset_ids,
+        )
+        if asset is None and (renderer_profile == "plugin_v1" or not procedural_fallback):
+            raise ValueError(f"No unused asset renderer available for {source_type!r}")
+        if asset is not None:
+            used_asset_ids.add(asset.asset_id)
+        recipe = PROCEDURAL_RECIPE_BY_SOURCE_TYPE.get(source_type, "pluck_stab")
+        base_gain = _default_gain(source_type, recipe)
+        gain = (asset.default_gain_db if asset is not None else base_gain) + float(
+            rng.normal(0.0, 1.2)
+        )
         pan = 0.0
         source_id = f"source_{index:03d}"
+        family = asset.family if asset is not None else _family_for_source_type(source_type)
+        instrument = asset.instrument if asset is not None else source_type
+        articulation = (
+            asset.articulation if asset is not None else _default_articulation(source_type)
+        )
         sources.append(
             SourceMetadata(
                 source_id=source_id,
                 source_type=source_type,
+                family=family,
+                instrument=instrument,
+                articulation=articulation,
+                renderer=asset.renderer if asset is not None else "procedural_synth",
+                asset_id=asset.asset_id if asset is not None else None,
                 synth_parameters=_synth_parameters(
                     rng,
-                    source_type,
+                    recipe,
                     instance_index=instance_index,
                     instance_count=type_counts[source_type],
+                )
+                | (
+                    {
+                        "asset_path": str(catalog.resolve_path(asset))
+                        if catalog is not None
+                        else asset.path,
+                        "plugin_path": str(catalog.resolve_path(asset))
+                        if catalog is not None
+                        else asset.path,
+                        "preset_path": str(catalog.resolve_preset_path(asset))
+                        if catalog is not None and catalog.resolve_preset_path(asset) is not None
+                        else asset.preset_path,
+                        "asset_root_key": asset.root_key,
+                        "asset_note_min": asset.note_min,
+                        "asset_note_max": asset.note_max,
+                        "asset_velocity_min": asset.velocity_min,
+                        "asset_velocity_max": asset.velocity_max,
+                        "asset_duration_seconds": asset.metadata.get("duration_seconds"),
+                    }
+                    if asset is not None
+                    else {}
                 ),
                 effect_parameters=_effect_parameters(
                     rng,
-                    source_type,
+                    recipe,
                     instance_index=instance_index,
                     instance_count=type_counts[source_type],
                 ),
@@ -489,6 +735,77 @@ def _make_sources(
             )
         )
     return sources
+
+
+def _choose_asset_for_source(
+    rng: np.random.Generator,
+    catalog: AssetCatalog | None,
+    source_type: SourceType,
+    renderer_profile: str,
+    include_tags: tuple[str, ...] = (),
+    exclude_tags: tuple[str, ...] = (),
+    exclude_asset_ids: set[str] | None = None,
+) -> AssetEntry | None:
+    if catalog is None or not catalog.entries or renderer_profile == "procedural_only":
+        return None
+    exclude_asset_ids = exclude_asset_ids or set()
+    if renderer_profile == "plugin_v1":
+        renderers = ("dawdreamer_plugin", "wav_one_shot", "sfz_instrument")
+    else:
+        renderers = ("wav_one_shot", "sfz_instrument", "dawdreamer_plugin")
+    candidates = [
+        entry
+        for renderer in renderers
+        for entry in catalog.candidates(source_type, renderer)
+        if _asset_matches_tags(entry, include_tags, exclude_tags)
+        and entry.asset_id not in exclude_asset_ids
+    ]
+    if not candidates:
+        return None
+    weights = np.array([max(float(entry.weight), 0.0) for entry in candidates], dtype=np.float64)
+    if float(weights.sum()) <= 0:
+        raise ValueError(f"Asset candidates for {source_type!r} all have non-positive weight")
+    index = int(rng.choice(len(candidates), p=weights / weights.sum()))
+    return candidates[index]
+
+
+def _asset_matches_tags(
+    entry: AssetEntry, include_tags: tuple[str, ...], exclude_tags: tuple[str, ...]
+) -> bool:
+    tags = set(entry.tags)
+    return set(include_tags).issubset(tags) and tags.isdisjoint(exclude_tags)
+
+
+def _family_for_source_type(source_type: str) -> str:
+    return FAMILY_BY_SOURCE_TYPE.get(source_type, "tonal")
+
+
+def _default_articulation(source_type: str) -> str:
+    if source_type in {"riser", "noise_sweep"}:
+        return "sweep"
+    if source_type == "impact":
+        return "hit"
+    if source_type.endswith("_bass"):
+        return "held"
+    if source_type in {"pad_chord", "guitar_strum"}:
+        return "chord"
+    return "hit"
+
+
+def _default_gain(source_type: str, recipe: str) -> float:
+    if source_type == "kick":
+        return -3.5
+    if source_type in {"snare", "clap"}:
+        return -8.0
+    if source_type in {"closed_hat", "open_hat", "cymbal"}:
+        return -13.0
+    if source_type in {"percussion", "tom"}:
+        return -11.0
+    if recipe == "fm_bass":
+        return -10.0
+    if recipe == "pluck_stab":
+        return -2.0
+    return -14.0
 
 
 def _variant_position(instance_index: int, instance_count: int) -> float:
@@ -510,6 +827,7 @@ def _variant_base(
 ) -> dict[str, Any]:
     position = _variant_position(instance_index, instance_count)
     return {
+        "procedural_recipe": source_type,
         "timbre_variant": _variant_label(position),
         "variant_index": instance_index,
         "variant_count": instance_count,
@@ -652,15 +970,41 @@ def _make_events(
     bass_note_pool: list[int],
     lead_note_pool: list[int],
     duration: float,
+    composition_profile: str = "edm_v1",
 ) -> list[EventMetadata]:
     events: list[EventMetadata] = []
     beat = 60.0 / bpm
     measure = beats_per_measure * beat
     backbeat_positions = _backbeat_positions(beats_per_measure)
     event_index = 0
+    percussion_template = (
+        str(rng.choice(PERCUSSION_RHYTHM_TEMPLATES))
+        if composition_profile == "percussion_v1"
+        else "edm_v1"
+    )
     for source in sources:
+        recipe = _procedural_recipe_for_source(source)
         rhythm_subdivision = int(rng.choice(RHYTHM_SUBDIVISIONS))
-        if source.source_type == "kick":
+        if composition_profile == "percussion_v1":
+            onsets, length, rhythm_subdivision = _percussion_profile_events(
+                rng,
+                source.source_type,
+                duration,
+                beat,
+                measure,
+                beats_per_measure,
+                percussion_template,
+            )
+            length = _asset_aware_percussion_length(source, length, duration)
+            onsets = _thin_same_track_overlaps(
+                rng,
+                onsets,
+                source.source_type,
+                length,
+                duration,
+                percussion_template,
+            )
+        elif source.source_type == "kick":
             onsets = _metered_onsets(duration, measure, [0.0])
             extra = _metered_onsets(
                 duration, measure, [position * beat for position in range(1, beats_per_measure)]
@@ -668,14 +1012,14 @@ def _make_events(
             extra = extra[rng.random(len(extra)) > 0.62] if len(extra) else extra
             onsets = np.sort(np.concatenate([onsets, extra]))
             length = 0.34
-        elif source.source_type == "snare_clap":
+        elif source.source_type in {"snare", "clap"}:
             onsets = _metered_onsets(
                 duration,
                 measure,
                 [position * beat for position in backbeat_positions],
             )
             length = 0.28
-        elif source.source_type == "hat_noise":
+        elif source.source_type in {"closed_hat", "open_hat", "cymbal", "percussion"}:
             rhythm_subdivision = int(rng.choice([2, 4, 6, 8]))
             onsets = _random_grid_onsets(
                 rng,
@@ -685,8 +1029,8 @@ def _make_events(
                 density=float(rng.uniform(0.42, 0.86)),
                 force_downbeats=True,
             )
-            length = 0.08
-        elif source.source_type == "fm_bass":
+            length = 0.08 if source.source_type == "closed_hat" else 0.18
+        elif source.source_type in {"synth_bass", "electric_bass", "acoustic_bass"}:
             rhythm_subdivision = int(rng.choice([2, 3, 4]))
             onsets = _random_grid_onsets(
                 rng,
@@ -697,7 +1041,7 @@ def _make_events(
                 force_downbeats=True,
             )
             length = beat * float(rng.uniform(0.75, 1.75))
-        elif source.source_type == "fm_growl":
+        elif recipe == "fm_growl":
             offsets = [0.0]
             if beats_per_measure > 2 and rng.random() < 0.35:
                 offsets.append(measure * 0.5)
@@ -706,7 +1050,7 @@ def _make_events(
             if len(onsets) == 0:
                 onsets = np.array([0.0], dtype=np.float32)
             length = beat * float(rng.choice([0.75, 1.0, 1.5]))
-        elif source.source_type == "wub_bass":
+        elif recipe == "wub_bass":
             offsets = [0.0]
             if beats_per_measure > 2 and rng.random() < 0.35:
                 offsets.append(measure * 0.5)
@@ -715,7 +1059,7 @@ def _make_events(
             if len(onsets) == 0:
                 onsets = np.array([0.0], dtype=np.float32)
             length = beat * float(rng.choice([0.75, 1.0, 1.5]))
-        elif source.source_type == "pluck_stab":
+        elif recipe == "pluck_stab":
             rhythm_subdivision = int(rng.choice([3, 4, 6, 8]))
             motif_density = float(rng.uniform(0.36, 0.74))
             onsets = _random_grid_onsets(
@@ -737,36 +1081,24 @@ def _make_events(
             if onset >= duration:
                 continue
             offset = min(duration, float(onset + length))
-            attack = {
-                "kick": 0.002,
-                "snare_clap": 0.003,
-                "hat_noise": 0.001,
-                "fm_bass": float(rng.uniform(0.004, 0.018)),
-                "fm_growl": float(rng.uniform(0.01, 0.04)),
-                "wub_bass": float(rng.uniform(0.008, 0.026)),
-                "pluck_stab": float(rng.uniform(0.002, 0.012)),
-                "riser_impact": 0.08,
-            }[source.source_type]
-            release = {
-                "kick": 0.08,
-                "snare_clap": 0.12,
-                "hat_noise": 0.03,
-                "fm_bass": float(rng.uniform(0.035, 0.09)),
-                "fm_growl": float(rng.uniform(0.08, 0.22)),
-                "wub_bass": float(rng.uniform(0.06, 0.18)),
-                "pluck_stab": float(rng.uniform(0.08, 0.2)),
-                "riser_impact": 0.45,
-            }[source.source_type]
+            attack, release = _event_envelope_labels(source, recipe, offset - float(onset), rng)
             note = None
-            if source.source_type in {"fm_bass", "fm_growl", "wub_bass"}:
+            if source.source_type in {"synth_bass", "electric_bass", "acoustic_bass"}:
                 note = _choose_bass_note(
-                    rng, bass_note_pool, prefer_low=source.source_type != "fm_bass"
+                    rng,
+                    _notes_in_asset_range(source, bass_note_pool),
+                    prefer_low=source.source_type != "synth_bass",
                 )
-            elif source.source_type == "pluck_stab":
-                note = int(rng.choice(lead_note_pool))
-            velocity = float(rng.uniform(0.62, 1.0))
+            elif recipe == "pluck_stab":
+                note = int(rng.choice(_notes_in_asset_range(source, lead_note_pool)))
+            velocity_min = max(0.0, float(source.synth_parameters.get("asset_velocity_min", 0.62)))
+            velocity_max = min(1.0, float(source.synth_parameters.get("asset_velocity_max", 1.0)))
+            velocity_low = max(0.62, velocity_min)
+            if velocity_low > velocity_max:
+                raise ValueError(f"Invalid velocity range for {source.source_id}")
+            velocity = float(rng.uniform(velocity_low, velocity_max))
             timbre_variation = _event_timbre_variation(
-                rng, source.source_type, position=float(onset) / duration
+                rng, recipe, position=float(onset) / duration
             )
             events.append(
                 EventMetadata(
@@ -786,11 +1118,208 @@ def _make_events(
                         "rhythm_subdivision": rhythm_subdivision,
                         "duration_beats": round((offset - float(onset)) / beat, 6),
                         "timbre_variation": timbre_variation,
+                        "composition_profile": composition_profile,
+                        "rhythm_template": percussion_template,
                     },
                 )
             )
             event_index += 1
     return events
+
+
+def _percussion_profile_events(
+    rng: np.random.Generator,
+    source_type: SourceType,
+    duration: float,
+    beat: float,
+    measure: float,
+    beats_per_measure: int,
+    template: str,
+) -> tuple[np.ndarray, float, int]:
+    if template == "solo_hits":
+        subdivision = int(rng.choice([2, 4, 6, 8]))
+        onsets = _random_grid_onsets(
+            rng,
+            duration,
+            beat,
+            subdivision,
+            density=float(rng.uniform(0.05, 0.16)),
+            force_downbeats=False,
+        )
+        return (
+            onsets[: max(1, int(rng.integers(1, 5)))],
+            _percussion_length(source_type, beat),
+            subdivision,
+        )
+    if template == "sparse":
+        subdivision = int(rng.choice([2, 3, 4]))
+        onsets = _random_grid_onsets(
+            rng,
+            duration,
+            beat,
+            subdivision,
+            density=float(rng.uniform(0.12, 0.32)),
+            force_downbeats=source_type == "kick",
+        )
+        return onsets, _percussion_length(source_type, beat), subdivision
+    if source_type == "kick":
+        offsets = [0.0]
+        if template in {"straight", "breakbeat", "fills"}:
+            offsets.extend(position * beat for position in range(1, beats_per_measure))
+        if template == "two_step" and beats_per_measure > 2:
+            offsets.append((beats_per_measure - 1) * beat)
+        if template == "half_time" and beats_per_measure > 2:
+            offsets.append(measure * 0.5)
+        onsets = _metered_onsets(duration, measure, offsets)
+        if len(onsets):
+            keep = 0.55 if template in {"breakbeat", "fills"} else 0.8
+            onsets = onsets[rng.random(len(onsets)) < keep]
+        return _ensure_onsets(onsets, duration), 0.34, 2
+    if source_type in {"snare", "clap"}:
+        positions = (
+            [beats_per_measure - 1]
+            if template == "half_time"
+            else _backbeat_positions(beats_per_measure)
+        )
+        onsets = _metered_onsets(duration, measure, [position * beat for position in positions])
+        if template in {"breakbeat", "fills"}:
+            ghosts = _random_grid_onsets(
+                rng,
+                duration,
+                beat,
+                4,
+                density=float(rng.uniform(0.08, 0.22)),
+                force_downbeats=False,
+            )
+            onsets = np.sort(np.concatenate([onsets, ghosts]))
+        return _ensure_onsets(onsets, duration), 0.28, 4
+    if source_type in {"closed_hat", "open_hat"}:
+        subdivision = 8 if template == "dense_hats" else int(rng.choice([3, 4, 6, 8]))
+        density = 0.82 if template == "dense_hats" else float(rng.uniform(0.35, 0.72))
+        onsets = _random_grid_onsets(
+            rng,
+            duration,
+            beat,
+            subdivision,
+            density=density,
+            force_downbeats=template in {"straight", "triplet"},
+        )
+        return onsets, 0.08 if source_type == "closed_hat" else 0.24, subdivision
+    subdivision = 3 if template == "triplet" else int(rng.choice([2, 4, 6, 8]))
+    density = float(rng.uniform(0.18, 0.58))
+    if template in {"foley", "fills"}:
+        density = float(rng.uniform(0.32, 0.76))
+    onsets = _random_grid_onsets(
+        rng,
+        duration,
+        beat,
+        subdivision,
+        density=density,
+        force_downbeats=source_type in {"cymbal", "tom"},
+    )
+    if template == "fills" and len(onsets):
+        fill_start = max(0.0, duration - measure)
+        onsets = onsets[onsets >= fill_start] if rng.random() < 0.5 else onsets
+    return _ensure_onsets(onsets, duration), _percussion_length(source_type, beat), subdivision
+
+
+def _percussion_length(source_type: SourceType, beat: float) -> float:
+    if source_type == "kick":
+        return 0.34
+    if source_type in {"snare", "clap"}:
+        return 0.28
+    if source_type == "closed_hat":
+        return 0.08
+    if source_type in {"open_hat", "cymbal"}:
+        return min(0.72, beat * 0.75)
+    if source_type == "tom":
+        return 0.36
+    return 0.18
+
+
+def _asset_aware_percussion_length(
+    source: SourceMetadata, fallback_length: float, clip_duration: float
+) -> float:
+    if source.renderer != "wav_one_shot":
+        return fallback_length
+    asset_duration = source.synth_parameters.get("asset_duration_seconds")
+    if asset_duration is None:
+        return fallback_length
+    return min(clip_duration, max(fallback_length, float(asset_duration)))
+
+
+def _event_envelope_labels(
+    source: SourceMetadata, recipe: SourceType, event_duration: float, rng: np.random.Generator
+) -> tuple[float, float]:
+    if source.renderer == "wav_one_shot":
+        return 0.0, max(0.0, event_duration)
+    attack = {
+        "kick": 0.002,
+        "snare_clap": 0.003,
+        "hat_noise": 0.001,
+        "fm_bass": float(rng.uniform(0.004, 0.018)),
+        "fm_growl": float(rng.uniform(0.01, 0.04)),
+        "wub_bass": float(rng.uniform(0.008, 0.026)),
+        "pluck_stab": float(rng.uniform(0.002, 0.012)),
+        "riser_impact": 0.08,
+    }[recipe]
+    release = {
+        "kick": 0.08,
+        "snare_clap": 0.12,
+        "hat_noise": 0.03,
+        "fm_bass": float(rng.uniform(0.035, 0.09)),
+        "fm_growl": float(rng.uniform(0.08, 0.22)),
+        "wub_bass": float(rng.uniform(0.06, 0.18)),
+        "pluck_stab": float(rng.uniform(0.08, 0.2)),
+        "riser_impact": 0.45,
+    }[recipe]
+    return attack, release
+
+
+def _thin_same_track_overlaps(
+    rng: np.random.Generator,
+    onsets: np.ndarray,
+    source_type: SourceType,
+    length: float,
+    duration: float,
+    template: str,
+) -> np.ndarray:
+    if len(onsets) <= 1:
+        return onsets
+    overlap_factor = {
+        "closed_hat": 0.28,
+        "open_hat": 0.7,
+        "cymbal": 0.8,
+        "tom": 0.9,
+        "kick": 0.55,
+        "snare": 0.6,
+        "clap": 0.5,
+        "percussion": 0.68,
+    }.get(source_type, 0.65)
+    overlap_chance = 0.2 if template in {"fills", "dense_hats"} else 0.08
+    if source_type in {"tom", "cymbal", "open_hat"}:
+        overlap_chance *= 0.5
+    minimum_gap = min(max(0.02, length * overlap_factor), max(0.02, duration * 0.75))
+    kept: list[float] = []
+    last_strict_onset: float | None = None
+    for onset in sorted(float(value) for value in onsets if value < duration):
+        if last_strict_onset is None or onset - last_strict_onset >= minimum_gap:
+            kept.append(onset)
+            last_strict_onset = onset
+            continue
+        if rng.random() < overlap_chance:
+            kept.append(onset)
+    if not kept:
+        kept.append(float(onsets[0]))
+    return np.array(kept, dtype=np.float32)
+
+
+def _ensure_onsets(onsets: np.ndarray, duration: float) -> np.ndarray:
+    if len(onsets):
+        return onsets
+    return np.array(
+        [0.0 if duration <= 1.0 else min(duration - 0.1, duration * 0.5)], dtype=np.float32
+    )
 
 
 def _event_timbre_variation(
@@ -849,6 +1378,22 @@ def _choose_bass_note(rng: np.random.Generator, bass_note_pool: list[int], prefe
     if prefer_low and low_notes and rng.random() < 0.85:
         return int(rng.choice(low_notes))
     return int(rng.choice(bass_note_pool))
+
+
+def _notes_in_asset_range(source: SourceMetadata, note_pool: list[int]) -> list[int]:
+    note_min = source.synth_parameters.get("asset_note_min")
+    note_max = source.synth_parameters.get("asset_note_max")
+    candidates = [
+        note
+        for note in note_pool
+        if (note_min is None or note >= int(note_min))
+        and (note_max is None or note <= int(note_max))
+    ]
+    if not candidates:
+        raise ValueError(
+            f"No generated notes fit asset range for {source.source_id} ({source.asset_id})"
+        )
+    return candidates
 
 
 def _backbeat_positions(beats_per_measure: int) -> list[int]:
@@ -929,18 +1474,125 @@ def _render_source(
     duration: float,
     rng: np.random.Generator,
 ) -> np.ndarray:
+    if source.renderer == "wav_one_shot":
+        return _render_wav_one_shot(source, events, sample_rate, duration)
+    if source.renderer == "sfz_instrument":
+        return _render_sfz_instrument(source, events, sample_rate, duration)
+    if source.renderer == "dawdreamer_plugin":
+        return render_dawdreamer_source(source, events, sample_rate, duration)
     total_samples = int(round(sample_rate * duration))
     mono = np.zeros(total_samples, dtype=np.float32)
+    render_source = source.model_copy(update={"source_type": _procedural_recipe_for_source(source)})
     for event in events:
         start = int(round(event.onset_seconds * sample_rate))
         stop = min(total_samples, int(round(event.offset_seconds * sample_rate)))
         if stop <= start:
             continue
         length = stop - start
-        rendered = _render_event(source, event, length, sample_rate, rng)
+        rendered = _render_event(render_source, event, length, sample_rate, rng)
         mono[start:stop] += rendered[: stop - start]
     mono *= db_to_amp(source.gain_db)
     return mono.astype(np.float32)
+
+
+def _render_wav_one_shot(
+    source: SourceMetadata,
+    events: list[EventMetadata],
+    sample_rate: int,
+    duration: float,
+) -> np.ndarray:
+    asset_path = Path(str(source.synth_parameters["asset_path"]))
+    audio, asset_sample_rate = load_mono_wav(asset_path)
+    audio = _resample_to_rate(audio, asset_sample_rate, sample_rate)
+    total_samples = int(round(sample_rate * duration))
+    mono = np.zeros(total_samples, dtype=np.float32)
+    for event in events:
+        start = int(round(event.onset_seconds * sample_rate))
+        stop = min(total_samples, start + len(audio))
+        if stop <= start:
+            continue
+        rendered = audio[: stop - start] * float(event.velocity)
+        rendered = _edge_fade(rendered, sample_rate)
+        mono[start:stop] += rendered
+    mono *= db_to_amp(source.gain_db)
+    return mono.astype(np.float32)
+
+
+def _render_sfz_instrument(
+    source: SourceMetadata,
+    events: list[EventMetadata],
+    sample_rate: int,
+    duration: float,
+) -> np.ndarray:
+    sfz_path = Path(str(source.synth_parameters["asset_path"]))
+    regions, _warnings = parse_sfz(sfz_path)
+    total_samples = int(round(sample_rate * duration))
+    mono = np.zeros(total_samples, dtype=np.float32)
+    for event in events:
+        midi_note = int(event.midi_note or source.synth_parameters.get("asset_root_key") or 60)
+        region = choose_sfz_region(regions, midi_note, float(event.velocity))
+        sample_path = sfz_path.parent / region.sample
+        audio, asset_sample_rate = load_mono_wav(sample_path)
+        start_sample = min(region.offset, len(audio))
+        end_sample = min(region.end + 1 if region.end is not None else len(audio), len(audio))
+        audio = audio[start_sample:end_sample]
+        audio = _resample_to_rate(audio, asset_sample_rate, sample_rate)
+        root_key = region.pitch_keycenter or int(
+            source.synth_parameters.get("asset_root_key") or midi_note
+        )
+        semitones = midi_note - root_key + region.tune / 100.0
+        if abs(semitones) > 1e-6:
+            audio = _pitch_shift_by_resample(audio, semitones)
+        event_len = max(1, int(round((event.offset_seconds - event.onset_seconds) * sample_rate)))
+        if len(audio) < event_len:
+            audio = np.pad(audio, (0, event_len - len(audio)))
+        else:
+            audio = audio[:event_len]
+        attack = max(float(region.ampeg_attack), float(event.attack_seconds))
+        release = max(float(region.ampeg_release), float(event.release_seconds))
+        env = adsr_envelope(len(audio), sample_rate, attack, release, sustain=0.85)
+        rendered = audio * env * float(event.velocity) * db_to_amp(region.volume)
+        start = int(round(event.onset_seconds * sample_rate))
+        stop = min(total_samples, start + len(rendered))
+        if stop > start:
+            mono[start:stop] += rendered[: stop - start]
+    mono *= db_to_amp(source.gain_db)
+    return mono.astype(np.float32)
+
+
+def _resample_to_rate(audio: np.ndarray, actual_rate: int, target_rate: int) -> np.ndarray:
+    if actual_rate == target_rate:
+        return audio.astype(np.float32)
+    target_len = max(1, int(round(len(audio) * target_rate / actual_rate)))
+    return signal.resample(audio, target_len).astype(np.float32)
+
+
+def _pitch_shift_by_resample(audio: np.ndarray, semitones: float) -> np.ndarray:
+    ratio = 2.0 ** (semitones / 12.0)
+    pitched_len = max(1, int(round(len(audio) / ratio)))
+    shifted = signal.resample(audio, pitched_len).astype(np.float32)
+    if len(shifted) == len(audio):
+        return shifted
+    return signal.resample(shifted, len(audio)).astype(np.float32)
+
+
+def _edge_fade(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    out = audio.astype(np.float32).copy()
+    fade_n = min(len(out) // 2, max(1, int(round(sample_rate * 0.003))))
+    if fade_n > 0:
+        fade_in = np.linspace(0.0, 1.0, fade_n, endpoint=True, dtype=np.float32)
+        out[:fade_n] *= fade_in
+        out[-fade_n:] *= fade_in[::-1]
+    return out
+
+
+def _procedural_recipe_for_source(source: SourceMetadata) -> str:
+    return str(
+        source.synth_parameters.get(
+            "procedural_recipe",
+            PROCEDURAL_RECIPE_BY_SOURCE_TYPE.get(source.source_type, source.source_type),
+        )
+    )
 
 
 def _render_event(
@@ -1207,13 +1859,14 @@ def _apply_source_effects(
     drive = float(source.effect_parameters.get("drive", 1.0))
     if drive > 1.01:
         out = saturate(out, drive)
-    if source.source_type == "fm_bass":
+    recipe = _procedural_recipe_for_source(source)
+    if recipe == "fm_bass":
         out = butter_filter(out, sample_rate, 6200.0, "lowpass", order=2)
-    if source.source_type == "wub_bass":
+    if recipe == "wub_bass":
         out = butter_filter(out, sample_rate, 4200.0, "lowpass", order=2)
-    if source.source_type == "fm_growl":
+    if recipe == "fm_growl":
         out = butter_filter(out, sample_rate, 4800.0, "lowpass", order=2)
-    if source.source_type == "riser_impact":
+    if recipe == "riser_impact":
         out = butter_filter(out, sample_rate, 5200.0, "highpass", order=1)
     return out.astype(np.float32)
 

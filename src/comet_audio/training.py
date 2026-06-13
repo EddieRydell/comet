@@ -11,6 +11,7 @@ from typing import Literal
 import numpy as np
 import soundfile as sf
 import torch
+from scipy.optimize import linear_sum_assignment
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, Dataset
 from torchaudio.transforms import MelSpectrogram
@@ -27,6 +28,7 @@ TRAIN_CROP_SECONDS = 4.0
 DEFAULT_EPOCHS = 40
 DEFAULT_BATCH_SIZE = 16
 SOURCE_TYPE_TO_INDEX = {source_type: index for index, source_type in enumerate(SOURCE_TYPES)}
+TrainingTarget = Literal["source_types_v1", "anonymous_slots_v1"]
 
 SplitName = Literal["train", "val", "test"]
 
@@ -103,20 +105,22 @@ def build_targets(
     sample_rate: int = SAMPLE_RATE,
     hop_length: int = HOP_LENGTH,
     onset_sigma_seconds: float = 0.006,
+    source_types: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Tensor]:
+    source_types = tuple(source_types or SOURCE_TYPES)
+    source_type_to_index = {source_type: index for index, source_type in enumerate(source_types)}
     frame_times = crop_start_seconds + torch.arange(num_frames, dtype=torch.float32) * (
         hop_length / sample_rate
     )
     onset = torch.zeros(num_frames, dtype=torch.float32)
     attack = torch.zeros(num_frames, dtype=torch.float32)
-    sustain = torch.zeros(num_frames, dtype=torch.float32)
+    held = torch.zeros(num_frames, dtype=torch.float32)
     release = torch.zeros(num_frames, dtype=torch.float32)
-    active = torch.zeros(num_frames, dtype=torch.float32)
-    source_onset = torch.zeros(len(SOURCE_TYPES), num_frames, dtype=torch.float32)
+    source_onset = torch.zeros(len(source_types), num_frames, dtype=torch.float32)
     onset_offset = torch.zeros(num_frames, dtype=torch.float32)
     onset_offset_mask = torch.zeros(num_frames, dtype=torch.float32)
 
-    source_types = {source.source_id: source.source_type for source in metadata.sources}
+    event_source_types = {source.source_id: source.source_type for source in metadata.sources}
     unique_onsets = sorted({round(event.onset_seconds, 6) for event in metadata.events})
     for onset_seconds in unique_onsets:
         distance = torch.abs(frame_times - float(onset_seconds))
@@ -128,8 +132,10 @@ def build_targets(
             onset_offset_mask[near] = 1.0
 
     for event in metadata.events:
-        source_type = source_types[event.source_id]
-        source_index = SOURCE_TYPE_TO_INDEX[source_type]
+        source_type = event_source_types[event.source_id]
+        if source_type not in source_type_to_index:
+            continue
+        source_index = source_type_to_index[source_type]
         event_onset = float(event.onset_seconds)
         event_offset = float(event.offset_seconds)
         attack_end = min(event_offset, event_onset + float(event.attack_seconds))
@@ -140,14 +146,11 @@ def build_targets(
             source_onset[source_index],
             torch.exp(-0.5 * (event_distance / onset_sigma_seconds) ** 2),
         )
-        active = torch.maximum(
-            active, ((frame_times >= event_onset) & (frame_times <= event_offset)).float()
-        )
         attack = torch.maximum(
             attack, ((frame_times >= event_onset) & (frame_times < attack_end)).float()
         )
-        sustain = torch.maximum(
-            sustain, ((frame_times >= attack_end) & (frame_times < release_start)).float()
+        held = torch.maximum(
+            held, ((frame_times >= attack_end) & (frame_times < release_start)).float()
         )
         release = torch.maximum(
             release, ((frame_times >= release_start) & (frame_times <= event_offset)).float()
@@ -156,9 +159,8 @@ def build_targets(
     return {
         "onset": onset.clamp(0.0, 1.0),
         "attack": attack.clamp(0.0, 1.0),
-        "sustain": sustain.clamp(0.0, 1.0),
+        "held": held.clamp(0.0, 1.0),
         "release": release.clamp(0.0, 1.0),
-        "active": active.clamp(0.0, 1.0),
         "source_onset": source_onset.clamp(0.0, 1.0),
         "onset_offset": onset_offset,
         "onset_offset_mask": onset_offset_mask,
@@ -173,11 +175,15 @@ class CometTimingDataset(Dataset[dict[str, Tensor]]):
         training: bool,
         limit: int | None = None,
         crop_seconds: float = TRAIN_CROP_SECONDS,
+        target: TrainingTarget = "source_types_v1",
+        max_tracks: int = 16,
     ) -> None:
         items = split_manifest(load_manifest(data_dir), split)
         self.items = items[:limit] if limit is not None else items
         self.training = training
         self.crop_seconds = crop_seconds
+        self.target = target
+        self.max_tracks = max_tracks
 
     def __len__(self) -> int:
         return len(self.items)
@@ -191,13 +197,70 @@ class CometTimingDataset(Dataset[dict[str, Tensor]]):
         max_start = max(0.0, duration - crop_duration)
         crop_start = random.uniform(0.0, max_start) if self.training and max_start > 0 else 0.0
         waveform = crop_or_pad(waveform, crop_start, crop_duration)
-        targets = build_targets(
-            metadata,
-            num_frames=frame_count(waveform.numel()),
-            crop_start_seconds=crop_start,
-            sample_rate=metadata.sample_rate,
-        )
+        if self.target == "anonymous_slots_v1":
+            targets = build_anonymous_slot_targets(
+                metadata,
+                num_frames=frame_count(waveform.numel()),
+                max_tracks=self.max_tracks,
+                crop_start_seconds=crop_start,
+                sample_rate=metadata.sample_rate,
+            )
+        else:
+            targets = build_targets(
+                metadata,
+                num_frames=frame_count(waveform.numel()),
+                crop_start_seconds=crop_start,
+                sample_rate=metadata.sample_rate,
+            )
         return {"waveform": waveform, **targets}
+
+
+def build_anonymous_slot_targets(
+    metadata: ClipMetadata,
+    num_frames: int,
+    max_tracks: int = 16,
+    crop_start_seconds: float = 0.0,
+    sample_rate: int = SAMPLE_RATE,
+    hop_length: int = HOP_LENGTH,
+    mark_sigma_seconds: float = 0.006,
+) -> dict[str, Tensor]:
+    frame_times = crop_start_seconds + torch.arange(num_frames, dtype=torch.float32) * (
+        hop_length / sample_rate
+    )
+    slot_attack = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
+    slot_held = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
+    slot_release = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
+    slot_mask = torch.zeros(max_tracks, dtype=torch.float32)
+    sources = metadata.sources[:max_tracks]
+    source_to_slot = {source.source_id: index for index, source in enumerate(sources)}
+    for index in range(len(sources)):
+        slot_mask[index] = 1.0
+    for event in metadata.events:
+        if event.source_id not in source_to_slot:
+            continue
+        slot_index = source_to_slot[event.source_id]
+        onset = float(event.onset_seconds)
+        offset = float(event.offset_seconds)
+        attack_end = min(offset, onset + float(event.attack_seconds))
+        release_start = max(attack_end, offset - float(event.release_seconds))
+        slot_attack[slot_index] = torch.maximum(
+            slot_attack[slot_index],
+            ((frame_times >= onset) & (frame_times < attack_end)).float(),
+        )
+        slot_held[slot_index] = torch.maximum(
+            slot_held[slot_index],
+            ((frame_times >= attack_end) & (frame_times < release_start)).float(),
+        )
+        slot_release[slot_index] = torch.maximum(
+            slot_release[slot_index],
+            ((frame_times >= release_start) & (frame_times <= offset)).float(),
+        )
+    return {
+        "slot_attack": slot_attack.clamp(0.0, 1.0),
+        "slot_held": slot_held.clamp(0.0, 1.0),
+        "slot_release": slot_release.clamp(0.0, 1.0),
+        "slot_mask": slot_mask,
+    }
 
 
 class ResidualTCNBlock(nn.Module):
@@ -240,10 +303,8 @@ class CNNTCNTimingModel(nn.Module):
             nn.GroupNorm(8, channels),
             nn.SiLU(),
         )
-        self.tcn = nn.Sequential(
-            *[ResidualTCNBlock(channels, dilation=2**idx) for idx in range(7)]
-        )
-        self.global_head = nn.Conv1d(channels, 5, kernel_size=1)
+        self.tcn = nn.Sequential(*[ResidualTCNBlock(channels, dilation=2**idx) for idx in range(7)])
+        self.global_head = nn.Conv1d(channels, 4, kernel_size=1)
         self.source_head = nn.Conv1d(channels, source_type_count, kernel_size=1)
         self.offset_head = nn.Conv1d(channels, 1, kernel_size=1)
 
@@ -258,11 +319,52 @@ class CNNTCNTimingModel(nn.Module):
         return {
             "onset": global_logits[:, 0],
             "attack": global_logits[:, 1],
-            "sustain": global_logits[:, 2],
+            "held": global_logits[:, 2],
             "release": global_logits[:, 3],
-            "active": global_logits[:, 4],
             "source_onset": self.source_head(features),
             "onset_offset": self.offset_head(features).squeeze(1),
+        }
+
+
+class CNNTCNSlotModel(nn.Module):
+    def __init__(self, max_tracks: int = 16, channels: int = 96) -> None:
+        super().__init__()
+        self.max_tracks = max_tracks
+        self.mel = MelSpectrogram(
+            sample_rate=SAMPLE_RATE,
+            n_fft=N_FFT,
+            hop_length=HOP_LENGTH,
+            n_mels=N_MELS,
+            power=2.0,
+        )
+        self.cnn = nn.Sequential(
+            nn.Conv2d(1, 24, kernel_size=3, padding=1),
+            nn.GroupNorm(6, 24),
+            nn.SiLU(),
+            nn.Conv2d(24, 48, kernel_size=3, stride=(2, 1), padding=1),
+            nn.GroupNorm(8, 48),
+            nn.SiLU(),
+            nn.Conv2d(48, channels, kernel_size=3, stride=(2, 1), padding=1),
+            nn.GroupNorm(8, channels),
+            nn.SiLU(),
+        )
+        self.tcn = nn.Sequential(*[ResidualTCNBlock(channels, dilation=2**idx) for idx in range(7)])
+        self.slot_head = nn.Conv1d(channels, max_tracks * 3, kernel_size=1)
+
+    def forward(self, waveform: Tensor) -> dict[str, Tensor]:
+        if waveform.ndim == 1:
+            waveform = waveform.unsqueeze(0)
+        mel = self.mel(waveform)
+        log_mel = torch.log1p(mel * 10.0).unsqueeze(1)
+        features = self.cnn(log_mel).mean(dim=2)
+        features = self.tcn(features)
+        logits = self.slot_head(features)
+        batch, _, time = logits.shape
+        slots = logits.reshape(batch, self.max_tracks, 3, time)
+        return {
+            "slot_attack": slots[:, :, 0],
+            "slot_held": slots[:, :, 1],
+            "slot_release": slots[:, :, 2],
         }
 
 
@@ -297,10 +399,13 @@ def compute_loss(
 ) -> tuple[Tensor, dict[str, float]]:
     predictions, targets = _align_time(predictions, batch)
     onset_loss = focal_bce_with_logits(predictions["onset"], targets["onset"])
-    envelope_loss = sum(
-        torch.nn.functional.binary_cross_entropy_with_logits(predictions[name], targets[name])
-        for name in ("attack", "sustain", "release", "active")
-    ) / 4.0
+    envelope_loss = (
+        sum(
+            torch.nn.functional.binary_cross_entropy_with_logits(predictions[name], targets[name])
+            for name in ("attack", "held", "release")
+        )
+        / 3.0
+    )
     source_loss = focal_bce_with_logits(predictions["source_onset"], targets["source_onset"])
     mask = targets["onset_offset_mask"] > 0
     if bool(mask.any()):
@@ -319,6 +424,91 @@ def compute_loss(
     }
 
 
+def compute_anonymous_slot_loss(
+    predictions: dict[str, Tensor],
+    batch: dict[str, Tensor],
+) -> tuple[Tensor, dict[str, float]]:
+    time = min(predictions["slot_attack"].shape[-1], batch["slot_attack"].shape[-1])
+    pred = {key: value[..., :time] for key, value in predictions.items()}
+    target = {
+        key: value[..., :time]
+        for key, value in batch.items()
+        if key in {"slot_attack", "slot_held", "slot_release"}
+    }
+    assignments = _slot_assignments(pred, target)
+    attack_losses: list[Tensor] = []
+    held_losses: list[Tensor] = []
+    release_losses: list[Tensor] = []
+    for batch_index, assignment in enumerate(assignments):
+        pred_indices = torch.as_tensor(
+            [pair[0] for pair in assignment], device=pred["slot_attack"].device
+        )
+        target_indices = torch.as_tensor(
+            [pair[1] for pair in assignment], device=pred["slot_attack"].device
+        )
+        attack_losses.append(
+            focal_bce_with_logits(
+                pred["slot_attack"][batch_index, pred_indices],
+                target["slot_attack"][batch_index, target_indices],
+            )
+        )
+        held_losses.append(
+            torch.nn.functional.binary_cross_entropy_with_logits(
+                pred["slot_held"][batch_index, pred_indices],
+                target["slot_held"][batch_index, target_indices],
+            )
+        )
+        release_losses.append(
+            focal_bce_with_logits(
+                pred["slot_release"][batch_index, pred_indices],
+                target["slot_release"][batch_index, target_indices],
+            )
+        )
+    attack_loss = torch.stack(attack_losses).mean()
+    held_loss = torch.stack(held_losses).mean()
+    release_loss = torch.stack(release_losses).mean()
+    total = attack_loss + 0.6 * held_loss + release_loss
+    return total, {
+        "loss": float(total.detach().cpu()),
+        "slot_attack_loss": float(attack_loss.detach().cpu()),
+        "slot_held_loss": float(held_loss.detach().cpu()),
+        "slot_release_loss": float(release_loss.detach().cpu()),
+    }
+
+
+def _slot_assignments(
+    predictions: dict[str, Tensor], targets: dict[str, Tensor]
+) -> list[list[tuple[int, int]]]:
+    batch_size, slot_count, _time = predictions["slot_attack"].shape
+    rows: list[list[tuple[int, int]]] = []
+    with torch.no_grad():
+        pred_prob = {
+            key: torch.sigmoid(value).float().detach().cpu() for key, value in predictions.items()
+        }
+        target_cpu = {key: value.detach().cpu() for key, value in targets.items()}
+        for batch_index in range(batch_size):
+            cost = torch.zeros(slot_count, slot_count, dtype=torch.float32)
+            for pred_index in range(slot_count):
+                for target_index in range(slot_count):
+                    cost[pred_index, target_index] = (
+                        torch.nn.functional.binary_cross_entropy(
+                            pred_prob["slot_attack"][batch_index, pred_index],
+                            target_cpu["slot_attack"][batch_index, target_index],
+                        )
+                        + torch.nn.functional.binary_cross_entropy(
+                            pred_prob["slot_held"][batch_index, pred_index],
+                            target_cpu["slot_held"][batch_index, target_index],
+                        )
+                        + torch.nn.functional.binary_cross_entropy(
+                            pred_prob["slot_release"][batch_index, pred_index],
+                            target_cpu["slot_release"][batch_index, target_index],
+                        )
+                    )
+            pred_indices, target_indices = linear_sum_assignment(cost.numpy())
+            rows.append(list(zip(pred_indices.tolist(), target_indices.tolist(), strict=True)))
+    return rows
+
+
 def train_model(
     data_dir: Path,
     run_dir: Path,
@@ -326,29 +516,45 @@ def train_model(
     batch_size: int = DEFAULT_BATCH_SIZE,
     limit: int | None = None,
     learning_rate: float = 2e-4,
+    target: TrainingTarget = "source_types_v1",
+    max_tracks: int = 16,
 ) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    train_dataset = CometTimingDataset(data_dir, "train", training=True, limit=limit)
-    val_dataset = CometTimingDataset(data_dir, "val", training=False, limit=limit)
+    train_dataset = CometTimingDataset(
+        data_dir, "train", training=True, limit=limit, target=target, max_tracks=max_tracks
+    )
+    val_dataset = CometTimingDataset(
+        data_dir, "val", training=False, limit=limit, target=target, max_tracks=max_tracks
+    )
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
-    model = CNNTCNTimingModel().to(device)
+    model: nn.Module
+    if target == "anonymous_slots_v1":
+        model = CNNTCNSlotModel(max_tracks=max_tracks).to(device)
+    else:
+        model = CNNTCNTimingModel().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     scaler = torch.amp.GradScaler("cuda", enabled=False)
     best_val = math.inf
     metrics_path = run_dir / "metrics.jsonl"
 
     for epoch in range(1, epochs + 1):
-        train_metrics = _run_epoch(model, train_loader, optimizer, scaler, device, training=True)
-        val_metrics = _run_epoch(model, val_loader, optimizer, scaler, device, training=False)
+        train_metrics = _run_epoch(
+            model, train_loader, optimizer, scaler, device, training=True, target=target
+        )
+        val_metrics = _run_epoch(
+            model, val_loader, optimizer, scaler, device, training=False, target=target
+        )
         row = {"epoch": epoch, "train": train_metrics, "val": val_metrics}
         with metrics_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
         checkpoint = {
             "model": model.state_dict(),
             "epoch": epoch,
-            "source_types": SOURCE_TYPES,
+            "target": target,
+            "source_types": [] if target == "anonymous_slots_v1" else SOURCE_TYPES,
+            "max_tracks": max_tracks if target == "anonymous_slots_v1" else None,
             "config": {
                 "sample_rate": SAMPLE_RATE,
                 "n_fft": N_FFT,
@@ -363,12 +569,13 @@ def train_model(
 
 
 def _run_epoch(
-    model: CNNTCNTimingModel,
+    model: nn.Module,
     loader: DataLoader[dict[str, Tensor]],
     optimizer: torch.optim.Optimizer,
     scaler: torch.amp.GradScaler,
     device: torch.device,
     training: bool,
+    target: TrainingTarget = "source_types_v1",
 ) -> dict[str, float]:
     model.train(training)
     totals: dict[str, float] = {}
@@ -385,7 +592,10 @@ def _run_epoch(
             ),
         ):
             predictions = model(batch["waveform"])
-            loss, metrics = compute_loss(predictions, batch)
+            if target == "anonymous_slots_v1":
+                loss, metrics = compute_anonymous_slot_loss(predictions, batch)
+            else:
+                loss, metrics = compute_loss(predictions, batch)
         if training:
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
@@ -400,14 +610,25 @@ def _run_epoch(
 
 
 def load_trained_model(run_dir: Path, device: torch.device) -> CNNTCNTimingModel:
-    checkpoint_path = run_dir / "best.pt"
-    if not checkpoint_path.exists():
-        checkpoint_path = run_dir / "last.pt"
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    model = CNNTCNTimingModel().to(device)
+    checkpoint = load_training_checkpoint(run_dir, device)
+    source_types = checkpoint.get("source_types", SOURCE_TYPES)
+    model = CNNTCNTimingModel(source_type_count=len(source_types)).to(device)
     model.load_state_dict(checkpoint["model"])
     model.eval()
     return model
+
+
+def load_training_checkpoint(run_dir: Path, device: torch.device) -> dict[str, object]:
+    checkpoint_path = run_dir / "best.pt"
+    if not checkpoint_path.exists():
+        checkpoint_path = run_dir / "last.pt"
+    return torch.load(checkpoint_path, map_location=device)
+
+
+def load_trained_source_types(run_dir: Path) -> tuple[str, ...]:
+    checkpoint = load_training_checkpoint(run_dir, torch.device("cpu"))
+    source_types = checkpoint.get("source_types", SOURCE_TYPES)
+    return tuple(str(source_type) for source_type in source_types)
 
 
 def decode_onsets(
@@ -435,8 +656,7 @@ def decode_onsets(
             selected.append(index)
     selected.sort()
     return [
-        max(0.0, index * HOP_LENGTH / SAMPLE_RATE + float(offsets[index]))
-        for index in selected
+        max(0.0, index * HOP_LENGTH / SAMPLE_RATE + float(offsets[index])) for index in selected
     ]
 
 
@@ -491,7 +711,7 @@ def evaluate_model(
 
     all_errors: list[float] = []
     totals = {0.005: [0, 0, 0], 0.010: [0, 0, 0], 0.025: [0, 0, 0]}
-    envelope_counts = {name: [0, 0, 0] for name in ("attack", "sustain", "release")}
+    envelope_counts = {name: [0, 0, 0] for name in ("attack", "held", "release")}
     source_totals = [[0, 0, 0] for _ in SOURCE_TYPES]
     worst_rows: list[dict[str, float | int | str]] = []
 

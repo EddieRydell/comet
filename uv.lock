@@ -58,6 +58,7 @@ name = "comet-audio"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "dawdreamer" },
     { name = "numpy" },
     { name = "pedalboard" },
     { name = "pydantic" },
@@ -77,6 +78,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "dawdreamer", specifier = ">=0.8.3" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pedalboard", specifier = ">=0.9" },
     { name = "pydantic", specifier = ">=2.7" },
@@ -155,6 +157,17 @@ nvrtc = [
 ]
 nvtx = [
     { name = "nvidia-nvtx-cu12", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[package]]
+name = "dawdreamer"
+version = "0.8.3"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/57/de/6809aaa312e7fc8f78e9c417ce1125500265df8304040bb72af75a3a4bd6/dawdreamer-0.8.3-cp311-cp311-macosx_12_0_arm64.whl", hash = "sha256:2aa66a90f44cd1c3e174f641c16a1dd5952dcb1caa8d01a0c00188c343d19297", size = 30715916, upload-time = "2024-09-09T14:31:23.29Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/6a/1159d712c92cb0e98cec868d0948597edac66b6912fd1f6c118a5aaa7d41/dawdreamer-0.8.3-cp311-cp311-macosx_12_0_x86_64.whl", hash = "sha256:6388046df12a83e4b5630143cebf26ff907957886ba13624c3c2c8bed274b7f5", size = 33087583, upload-time = "2024-09-09T14:31:26.959Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/49/a737b119a3cd59260b571c52d522af8dc6914c97355d1f80eb1d1fd49358/dawdreamer-0.8.3-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:dc7b90ee5c149e5a6f9333a347a1380ab2e2985cca96aeafa7ab68f7759280f1", size = 40688306, upload-time = "2024-09-09T14:31:31.072Z" },
+    { url = "https://files.pythonhosted.org/packages/33/cc/b32cd99d168a44cc4bcc42927329f33f3a9341149ab52b7d9196f5e7038f/dawdreamer-0.8.3-cp311-cp311-win_amd64.whl", hash = "sha256:f603f96e110b1d581f108a3d5f62a09a56cb963bf7f84a0dbbf717e108a5b2a6", size = 30906080, upload-time = "2024-09-09T14:31:34.925Z" },
 ]
 
 [[package]]

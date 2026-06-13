@@ -1,6 +1,8 @@
 # Comet Audio
 
-Comet Audio is a procedural, plugin-free synthetic EDM dataset generator. Version 0 creates short labeled clips for onset and event-oriented research: a final mono mix WAV, wet mono per-source stems, metadata JSON, and a batch manifest.
+Comet Audio is a synthetic EDM dataset generator. It creates short labeled clips for onset and event-oriented research: a final mono mix WAV, wet mono per-source stems, metadata JSON, and a batch manifest.
+
+Version 1 keeps the same training-friendly mono layout while adding an asset-backed renderer layer for WAV one-shots, simple SFZ instruments, and DawDreamer-hosted synth presets captured from real plugin GUIs.
 
 ## Setup
 
@@ -38,10 +40,111 @@ You can also make denser clips:
 uv run comet generate --count 4 --source-count-min 8 --source-count-max 12
 ```
 
+To generate from a local asset catalog, put JSON or JSONL asset entries under `assets/library` and pass the catalog root:
+
+```powershell
+uv run comet assets validate --assets assets/library
+uv run comet generate --count 16 --assets assets/library --renderer-profile hybrid_v1
+```
+
+Each asset entry describes `asset_id`, `renderer`, `family`, `source_type`, `instrument`, `articulation`, `path`, optional note and velocity ranges, optional `root_key` and `round_robin_group`, and `default_gain_db`. Supported renderers are:
+
+- `procedural_synth`
+- `wav_one_shot`
+- `sfz_instrument`
+- `dawdreamer_plugin`
+
+`dawdreamer_plugin` entries also use `preset_path`, `tags`, and `weight`. `path` points to the plugin file, such as a VST3, and `preset_path` points to the DawDreamer state saved from the plugin GUI. `wav_one_shot`, `sfz_instrument`, and `dawdreamer_plugin` sources are mixed down to mono on render. New datasets use `dataset_version="comet-edm-v1"` and expose `source_type`, `family`, `instrument`, `articulation`, `renderer`, and `asset_id` directly on each source.
+
+To capture a synth preset, install a compatible plugin such as Vital or Surge XT, then open its editor through Comet:
+
+```powershell
+uv run comet synth capture --assets assets/library --plugin C:\path\to\Synth.vst3 --asset-id vital_reese_001 --source-type synth_bass --tags bass --tags reese --weight 2
+```
+
+Design the sound in the plugin window and close the editor. Comet saves a DawDreamer state file under the asset root and appends or updates the preset in `assets/library/catalog.json`.
+
+For the lowest-friction Surge XT workflow, launch the preset studio:
+
+```powershell
+uv run comet synth studio --assets assets/library --source-type synth_bass --tags bass --tags reese
+```
+
+Comet launches the Surge XT standalone app, watches `%USERPROFILE%\Documents\Surge XT` and `assets/library/imports/surge_xt/inbox` for new or changed `.fxp` files, imports each stable save through the Surge XT VST3, writes a DawDreamer state file under `assets/library/presets`, copies the source `.fxp` for provenance, writes a mono audition WAV under `assets/library/auditions`, and updates `assets/library/catalog.json`. In Surge XT, open `Workflow > Virtual Keyboard` or press `Alt+K`, play with the computer keyboard, and save useful patches as `.fxp`.
+
+The default Windows paths are:
+
+- `C:\Program Files\Surge Synth Team\Surge XT\Surge XT.exe`
+- `C:\Program Files\Common Files\VST3\Surge Synth Team\Surge XT.vst3`
+
+Override them when needed:
+
+```powershell
+uv run comet synth studio --standalone C:\path\to\Surge XT.exe --plugin C:\path\to\Surge XT.vst3 --watch-dir C:\patches
+```
+
+To import an existing Surge XT `.fxp` without launching the studio:
+
+```powershell
+uv run comet synth import-surge --preset-file C:\path\MyBass.fxp --asset-id surge_my_bass --source-type synth_bass --tags bass
+```
+
+While the catalog is small, generate with `hybrid_v1` so procedural sources fill gaps. Once enough catalog assets exist, switch to `plugin_v1`.
+
+Audition a captured preset:
+
+```powershell
+uv run comet synth audition --assets assets/library --asset-id vital_reese_001 --out data/generated/vital_reese_001.wav --midi-note 36
+```
+
+Generate from catalog-backed plugin, WAV, and SFZ assets only:
+
+```powershell
+uv run comet generate --assets assets/library --renderer-profile plugin_v1 --include-tag bass
+```
+
+`plugin_v1` fails if no valid catalog candidate exists for a selected source type. `--include-tag` and `--exclude-tag` filter catalog candidates before weighted selection.
+
+## Percussion One-Shot Libraries
+
+Use free one-shot packs by downloading and unzipping them locally, then importing the WAV folders into the asset catalog:
+
+```powershell
+uv run comet assets import-percussion --source C:\samples\99-drum-samples --assets assets/library --pack-id 99sounds_drums_1
+uv run comet assets validate --assets assets/library
+```
+
+The importer scans WAV files, skips likely loops by default, converts to mono 44.1 kHz, trims leading and trailing silence, peak-normalizes, rejects silent or long files, deduplicates by audio hash, and writes normalized one-shots under `assets/library/samples/percussion/<pack_id>/`. It classifies filenames and folders into generator buckets such as `kick`, `snare`, `clap`, `closed_hat`, `open_hat`, `cymbal`, `tom`, and `percussion`. Ambiguous files default to `percussion` and are listed in the import report under `assets/library/imports/percussion/`.
+
+Recommended starter packs:
+
+- 99Sounds 99 Drum Samples I/II
+- 99Sounds Percussa Toolbox
+- MusicRadar Essential Drum Kit Samples
+- MusicRadar Modular Percussion, hit folders only
+- MusicRadar Wooden Percussion, hit samples only
+- MusicRadar Processed 808/909, individual hits only
+
+Generate percussion-only training clips from imported assets:
+
+```powershell
+uv run comet generate --count 10000 --seed 400000 --out data/generated/percussion_slots_10k --composition-profile percussion_v1 --assets assets/library --renderer-profile plugin_v1 --include-tag percussion --no-procedural-fallback --source-count-min 1 --source-count-max 16 --training-layout --no-stems --no-visualizer
+```
+
+`percussion_v1` chooses only percussion-family source buckets and varies rhythm templates across straight, half-time, breakbeat, two-step, triplet, sparse, fill, solo-hit, dense-hat, and foley-style patterns. Loops remain out of scope because repeated attacks must be represented as metadata events.
+
+After training, run the timing model on an arbitrary song and write an interactive HTML viewer:
+
+```powershell
+uv run comet predict-song --audio C:\path\song.wav --run runs/cnn_tcn_v1 --out data/generated/song_predictions
+```
+
+The command writes `predictions.json`, copies the source audio into the output folder for browser playback, and writes `visualizer.html` with waveform display, playback controls, zoom, horizontal scrolling, decoded onset marks, and source-type lanes. The model runs at 44.1 kHz; other input sample rates are resampled for inference.
+
 For training datasets with minimal disk use, write a single root with only mono mixes, metadata, and a manifest:
 
 ```powershell
-uv run comet generate --count 10000 --seed 100000 --out data/generated/train_10k --training-layout --no-stems --no-preview
+uv run comet generate --count 10000 --seed 100000 --out data/generated/train_10k --training-layout --no-stems --no-visualizer
 ```
 
 That layout is:
@@ -49,6 +152,14 @@ That layout is:
 - `audio/clip_0000.wav`
 - `metadata/clip_0000.json`
 - `manifest.jsonl`
+
+Train the anonymous slot target on percussion data:
+
+```powershell
+uv run comet train --target anonymous_slots_v1 --max-tracks 16 --data data/generated/percussion_slots_10k --run runs/percussion_slots_v1
+```
+
+This target maps generated source tracks to unordered slots such as `track_00`, `track_01`, etc. Each slot predicts attack, held, and release phase regions. `off` is implied when all three are low. Training uses Hungarian matching between predicted and generated slots and does not include a source-type classifier head.
 
 ## Current Instrument Parameters
 
@@ -86,11 +197,10 @@ Each clip directory contains:
 The batch root contains:
 
 - `manifest.jsonl`
-- `preview.html`
 - `visualizer.html`
 
-Open `visualizer.html` in a browser to inspect the generated clips. It embeds batch metadata, plays the mix or any source stem, and shows per-source lanes with onset, attack, sustain, and release regions for each event.
+Open `visualizer.html` in a browser to inspect the generated clips. It embeds batch metadata, plays the mix or any source stem, and shows per-source lanes with onset, attack, held, and release regions for each event.
 
 ## Scope
 
-The v0 renderer uses NumPy/SciPy synthesis and processing with built-in effects only. It does not require external VSTs or DawDreamer. Future renderers can be added behind the same metadata model to support DawDreamer or plugin-hosted instruments while keeping the core generator usable on a clean machine.
+The procedural renderer uses NumPy/SciPy synthesis and processing with built-in effects only. DawDreamer is used only for `dawdreamer_plugin` rendering, capture, and audition commands. Plugin paths and preset state paths live in the asset catalog; this project does not use `.env` files or environment variables for plugin configuration.

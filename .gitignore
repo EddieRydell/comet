@@ -17,6 +17,23 @@ runs/
 *.mp3
 preview.html
 
+# Large local asset-library artifacts.
+assets/library/downloads/
+assets/library/samples/
+assets/library/imports/
+assets/library/auditions/
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+
+# Training and model artifacts.
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
 dist/
 build/
 *.egg-info/

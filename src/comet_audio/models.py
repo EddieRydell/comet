@@ -4,21 +4,45 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-SourceType = Literal[
+KnownSourceType = Literal[
     "kick",
-    "snare_clap",
-    "hat_noise",
-    "fm_bass",
-    "fm_growl",
-    "wub_bass",
-    "pluck_stab",
-    "riser_impact",
+    "snare",
+    "clap",
+    "closed_hat",
+    "open_hat",
+    "cymbal",
+    "tom",
+    "percussion",
+    "synth_bass",
+    "electric_bass",
+    "acoustic_bass",
+    "piano",
+    "electric_piano",
+    "organ",
+    "guitar_pluck",
+    "guitar_strum",
+    "mallet",
+    "string_stab",
+    "brass_stab",
+    "synth_lead",
+    "synth_pluck",
+    "pad_chord",
+    "riser",
+    "impact",
+    "noise_sweep",
 ]
+SourceType = str
+RendererType = Literal["procedural_synth", "wav_one_shot", "sfz_instrument", "dawdreamer_plugin"]
 
 
 class SourceMetadata(BaseModel):
     source_id: str
     source_type: SourceType
+    family: str = "unknown"
+    instrument: str = "unknown"
+    articulation: str = "unknown"
+    renderer: RendererType = "procedural_synth"
+    asset_id: str | None = None
     synth_parameters: dict[str, Any] = Field(default_factory=dict)
     effect_parameters: dict[str, Any] = Field(default_factory=dict)
     gain_db: float
