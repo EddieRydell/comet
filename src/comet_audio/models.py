@@ -32,7 +32,13 @@ KnownSourceType = Literal[
     "noise_sweep",
 ]
 SourceType = str
-RendererType = Literal["procedural_synth", "wav_one_shot", "sfz_instrument", "dawdreamer_plugin"]
+RendererType = Literal[
+    "procedural_synth",
+    "wav_one_shot",
+    "sfz_instrument",
+    "dawdreamer_plugin",
+    "surge_xt_fxp",
+]
 
 
 class SourceMetadata(BaseModel):

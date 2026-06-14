@@ -8,7 +8,12 @@ from typing import Annotated
 
 import typer
 
-from comet_audio.assets import import_percussion_samples, validate_asset_catalog
+from comet_audio.assets import (
+    SURGE_PATCH_LIBRARY_ROOTS,
+    import_percussion_samples,
+    index_surge_patches,
+    validate_asset_catalog,
+)
 from comet_audio.dawdreamer_renderer import (
     audition_plugin_preset,
     capture_plugin_preset,
@@ -90,12 +95,14 @@ def generate(
     ] = True,
     composition_profile: Annotated[
         str,
-        typer.Option(help="Composition profile: edm_v1 or percussion_v1."),
+        typer.Option(help="Composition profile: edm_v1, percussion_v1, or surge_patches_v1."),
     ] = "edm_v1",
 ) -> None:
     """Generate a batch of labeled procedural EDM clips."""
-    if composition_profile not in {"edm_v1", "percussion_v1"}:
-        raise typer.BadParameter("composition_profile must be one of: edm_v1, percussion_v1")
+    if composition_profile not in {"edm_v1", "percussion_v1", "surge_patches_v1"}:
+        raise typer.BadParameter(
+            "composition_profile must be one of: edm_v1, percussion_v1, surge_patches_v1"
+        )
     time_signatures = tuple(time_signature) if time_signature else DEFAULT_TIME_SIGNATURES
     config = GeneratorConfig(
         sample_rate=sample_rate,
@@ -324,6 +331,47 @@ def synth_import_surge(
     typer.echo(f"Imported {entry.asset_id}; wrote audition {audition_path}")
 
 
+@synth_app.command("index-surge-patches")
+def synth_index_surge_patches(
+    assets: Annotated[
+        Path,
+        typer.Option(help="Asset catalog root to update."),
+    ] = Path("assets/library"),
+    plugin: Annotated[
+        Path,
+        typer.Option(help="Surge XT VST3 path."),
+    ] = DEFAULT_SURGE_PLUGIN,
+    factory_root: Annotated[
+        Path,
+        typer.Option(help="Surge XT factory patch root."),
+    ] = SURGE_PATCH_LIBRARY_ROOTS[0][1],
+    thirdparty_root: Annotated[
+        Path,
+        typer.Option(help="Surge XT third-party patch root."),
+    ] = SURGE_PATCH_LIBRARY_ROOTS[1][1],
+    catalog_path: Annotated[
+        Path | None,
+        typer.Option(help="Catalog JSON to update. Defaults to assets/catalog.json."),
+    ] = None,
+    asset_prefix: Annotated[str, typer.Option(help="Prefix for generated asset IDs.")] = "surge_xt",
+) -> None:
+    """Index installed Surge XT .fxp patches by reference without copying presets."""
+    entries = index_surge_patches(
+        assets_root=assets,
+        plugin_path=plugin,
+        patch_roots=(("factory", factory_root), ("thirdparty", thirdparty_root)),
+        catalog_path=catalog_path,
+        asset_prefix=asset_prefix,
+    )
+    counts: dict[str, int] = {}
+    for entry in entries:
+        category = str(entry.metadata.get("surge_category", "unknown"))
+        counts[category] = counts.get(category, 0) + 1
+    typer.echo(f"Indexed {len(entries)} Surge XT patches into {assets}")
+    for category, count in sorted(counts.items()):
+        typer.echo(f"  {category}: {count}")
+
+
 @synth_app.command("studio")
 def synth_studio(
     assets: Annotated[
@@ -411,6 +459,54 @@ def synth_studio(
         typer.echo("Stopping watcher. Surge XT was left running so unsaved work is preserved.")
         return
     typer.echo("Surge XT exited; watcher stopped.")
+
+
+@app.command("synth-studio")
+def synth_studio_shortcut(
+    source_type: Annotated[
+        str,
+        typer.Option(help="Comet source_type for imported presets."),
+    ] = "synth_lead",
+    asset_prefix: Annotated[
+        str,
+        typer.Option(help="Prefix for generated asset IDs."),
+    ] = "surge_synth",
+    tags: Annotated[
+        list[str] | None,
+        typer.Option("--tags", help="Additional catalog tag. Repeatable."),
+    ] = None,
+    assets: Annotated[
+        Path,
+        typer.Option(help="Asset catalog root to update."),
+    ] = Path("assets/library"),
+    standalone: Annotated[
+        Path,
+        typer.Option(help="Surge XT standalone executable path."),
+    ] = DEFAULT_SURGE_STANDALONE,
+    plugin: Annotated[
+        Path,
+        typer.Option(help="Surge XT VST3 path."),
+    ] = DEFAULT_SURGE_PLUGIN,
+) -> None:
+    """Launch Surge XT with simple defaults for making synth training presets."""
+    synth_studio(
+        assets=assets,
+        standalone=standalone,
+        plugin=plugin,
+        watch_dir=None,
+        asset_prefix=asset_prefix,
+        source_type=source_type,
+        tags=["synth", "surge", *(tags or [])],
+        weight=1.0,
+        family="synth",
+        instrument="surge_xt",
+        articulation="held",
+        note_min=36,
+        note_max=84,
+        root_key=60,
+        default_gain_db=-10.0,
+        sample_rate=44_100,
+    )
 
 
 def _import_ready_surge_files(

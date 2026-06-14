@@ -67,6 +67,14 @@ Design the sound in the plugin window and close the editor. Comet saves a DawDre
 For the lowest-friction Surge XT workflow, launch the preset studio:
 
 ```powershell
+uv run comet synth-studio
+```
+
+This opens Surge XT with defaults for general synth training presets. Use `Alt+K` in Surge XT to open the virtual keyboard, design the patch, then save it as `.fxp`. Comet watches for the saved preset and imports it into `assets/library`.
+
+The detailed command is still available when you need to override source metadata:
+
+```powershell
 uv run comet synth studio --assets assets/library --source-type synth_bass --tags bass --tags reese
 ```
 

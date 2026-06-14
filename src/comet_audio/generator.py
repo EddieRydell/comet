@@ -19,7 +19,7 @@ from comet_audio.assets import (
     load_mono_wav,
     parse_sfz,
 )
-from comet_audio.dawdreamer_renderer import render_dawdreamer_source
+from comet_audio.dawdreamer_renderer import render_dawdreamer_source, render_surge_fxp_source
 from comet_audio.dsp import (
     TAU,
     adsr_envelope,
@@ -166,6 +166,7 @@ class GeneratorConfig:
     include_tags: tuple[str, ...] = ()
     exclude_tags: tuple[str, ...] = ()
     composition_profile: str = "edm_v1"
+    duration_profile: tuple[float, ...] | None = None
 
 
 def generate_batch(
@@ -198,6 +199,7 @@ def generate_batch(
             include_tags=include_tags,
             exclude_tags=exclude_tags,
             composition_profile=config.composition_profile,
+            duration_profile=config.duration_profile,
         )
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = out_dir / "manifest.jsonl"
@@ -280,8 +282,10 @@ def generate_clip(
             include_tags=config.include_tags if include_tags is None else include_tags,
             exclude_tags=config.exclude_tags if exclude_tags is None else exclude_tags,
             composition_profile=config.composition_profile,
+            duration_profile=config.duration_profile,
         )
     rng = np.random.default_rng(seed)
+    duration_seconds = _choose_clip_duration(rng, config)
     clip_id = clip_id or clip_dir.name
     dataset_root = dataset_root or clip_dir.parent
     if flat_layout:
@@ -337,7 +341,7 @@ def generate_clip(
         beat_unit,
         bass_note_pool,
         lead_note_pool,
-        config.duration_seconds,
+        duration_seconds,
         composition_profile=config.composition_profile,
     )
 
@@ -350,9 +354,7 @@ def generate_clip(
 
     for source in sources:
         source_events = [event for event in events if event.source_id == source.source_id]
-        dry = _render_source(
-            source, source_events, config.sample_rate, config.duration_seconds, rng
-        )
+        dry = _render_source(source, source_events, config.sample_rate, duration_seconds, rng)
         wet = _apply_source_effects(dry, source, config.sample_rate)
         if source.source_type != "kick":
             wet = sidechain_duck(
@@ -362,14 +364,15 @@ def generate_clip(
                 amount=float(source.effect_parameters.get("duck_amount", 0.0)),
                 release_seconds=float(source.effect_parameters.get("duck_release_seconds", 0.22)),
             )
-        wet = normalize_peak(wet, peak=0.95)
+        if source.renderer != "surge_xt_fxp":
+            wet = normalize_peak(wet, peak=0.95)
         stems[source.source_id] = wet
         if write_stems:
             sf.write(
                 stem_dir / Path(source.stem_path).name, wet, config.sample_rate, subtype="PCM_16"
             )
 
-    mix = np.zeros(int(round(config.sample_rate * config.duration_seconds)), dtype=np.float32)
+    mix = np.zeros(int(round(config.sample_rate * duration_seconds)), dtype=np.float32)
     for stem in stems.values():
         mix += stem
     mix = soft_limiter(mix, ceiling=0.98)
@@ -379,7 +382,7 @@ def generate_clip(
         dataset_version="comet-edm-v1",
         seed=seed,
         sample_rate=config.sample_rate,
-        duration_seconds=config.duration_seconds,
+        duration_seconds=duration_seconds,
         bpm=bpm,
         time_signature=f"{beats_per_measure}/{beat_unit}",
         beats_per_measure=beats_per_measure,
@@ -566,8 +569,12 @@ def _choose_sources(
     config = config or GeneratorConfig()
     if config.composition_profile == "percussion_v1":
         return _choose_percussion_sources(rng, source_count, config)
+    if config.composition_profile == "surge_patches_v1":
+        return _choose_surge_patch_sources(rng, source_count, config)
     if config.composition_profile != "edm_v1":
-        raise ValueError("composition_profile must be one of: edm_v1, percussion_v1")
+        raise ValueError(
+            "composition_profile must be one of: edm_v1, percussion_v1, surge_patches_v1"
+        )
     required: list[SourceType] = ["kick", "snare", "closed_hat", "synth_bass"]
     chosen = required[: min(source_count, len(required))]
     while len(chosen) < source_count:
@@ -596,6 +603,44 @@ def _choose_percussion_sources(
     return list(chosen)
 
 
+def _choose_surge_patch_sources(
+    rng: np.random.Generator, source_count: int, config: GeneratorConfig
+) -> list[SourceType]:
+    surge_available = _available_surge_source_types(config)
+    percussion_available = _available_percussion_source_types(config)
+    if not surge_available:
+        raise ValueError("surge_patches_v1 requires indexed Surge XT patch assets")
+    percussion_target = min(max(2, source_count // 4), 4, source_count)
+    surge_target = source_count - percussion_target
+    chosen = [str(rng.choice(surge_available)) for _ in range(surge_target)]
+    for anchor in ("kick", "snare", "closed_hat"):
+        if len(chosen) >= source_count:
+            break
+        if anchor in percussion_available:
+            chosen.append(anchor)
+    while len(chosen) < source_count:
+        pool = percussion_available or surge_available
+        chosen.append(str(rng.choice(pool)))
+    rng.shuffle(chosen)
+    return list(chosen)
+
+
+def _available_surge_source_types(config: GeneratorConfig) -> list[SourceType]:
+    if config.asset_catalog is None:
+        return []
+    available: list[SourceType] = []
+    for entry in config.asset_catalog.entries:
+        if entry.renderer != "surge_xt_fxp":
+            continue
+        if entry.source_type in PERCUSSION_SOURCE_TYPES:
+            continue
+        if not _asset_matches_tags(entry, config.include_tags, config.exclude_tags):
+            continue
+        if entry.source_type not in available:
+            available.append(entry.source_type)
+    return available
+
+
 def _available_percussion_source_types(config: GeneratorConfig) -> list[SourceType]:
     if config.procedural_fallback or config.asset_catalog is None:
         return list(PERCUSSION_SOURCE_TYPES)
@@ -607,6 +652,18 @@ def _available_percussion_source_types(config: GeneratorConfig) -> list[SourceTy
         ):
             available.append(source_type)
     return available
+
+
+def _choose_clip_duration(rng: np.random.Generator, config: GeneratorConfig) -> float:
+    if config.duration_profile is not None:
+        profile = config.duration_profile
+    elif config.composition_profile == "surge_patches_v1":
+        profile = (8.0, 8.0, 8.0, 12.0, 15.0)
+    else:
+        profile = (config.duration_seconds,)
+    if not profile:
+        raise ValueError("duration_profile must contain at least one duration")
+    return float(rng.choice(profile))
 
 
 def _choose_time_signature(
@@ -658,7 +715,7 @@ def _make_sources(
         for source_type in set(chosen_types)
     }
     type_seen: dict[SourceType, int] = {}
-    used_asset_ids: set[str] = set()
+    used_asset_keys: set[str] = set()
     for index, source_type in enumerate(chosen_types):
         instance_index = type_seen.get(source_type, 0)
         type_seen[source_type] = instance_index + 1
@@ -669,16 +726,17 @@ def _make_sources(
             renderer_profile,
             include_tags=include_tags,
             exclude_tags=exclude_tags,
-            exclude_asset_ids=used_asset_ids,
+            exclude_asset_keys=used_asset_keys,
         )
         if asset is None and (renderer_profile == "plugin_v1" or not procedural_fallback):
             raise ValueError(f"No unused asset renderer available for {source_type!r}")
         if asset is not None:
-            used_asset_ids.add(asset.asset_id)
+            used_asset_keys.add(_asset_unique_key(asset))
         recipe = PROCEDURAL_RECIPE_BY_SOURCE_TYPE.get(source_type, "pluck_stab")
         base_gain = _default_gain(source_type, recipe)
+        gain_jitter = 0.45 if asset is not None else 1.2
         gain = (asset.default_gain_db if asset is not None else base_gain) + float(
-            rng.normal(0.0, 1.2)
+            rng.normal(0.0, gain_jitter)
         )
         pan = 0.0
         source_id = f"source_{index:03d}"
@@ -719,6 +777,9 @@ def _make_sources(
                         "asset_velocity_min": asset.velocity_min,
                         "asset_velocity_max": asset.velocity_max,
                         "asset_duration_seconds": asset.metadata.get("duration_seconds"),
+                        "asset_audio_sha256": asset.metadata.get("audio_sha256"),
+                        "surge_amp_attack_seconds": round(float(rng.uniform(0.004, 0.18)), 5),
+                        "surge_amp_release_seconds": round(float(rng.uniform(0.08, 0.65)), 5),
                     }
                     if asset is not None
                     else {}
@@ -744,22 +805,27 @@ def _choose_asset_for_source(
     renderer_profile: str,
     include_tags: tuple[str, ...] = (),
     exclude_tags: tuple[str, ...] = (),
-    exclude_asset_ids: set[str] | None = None,
+    exclude_asset_keys: set[str] | None = None,
 ) -> AssetEntry | None:
     if catalog is None or not catalog.entries or renderer_profile == "procedural_only":
         return None
-    exclude_asset_ids = exclude_asset_ids or set()
-    if renderer_profile == "plugin_v1":
-        renderers = ("dawdreamer_plugin", "wav_one_shot", "sfz_instrument")
+    exclude_asset_keys = exclude_asset_keys or set()
+    if renderer_profile == "plugin_v1" and source_type in PERCUSSION_SOURCE_TYPES:
+        renderers = ("wav_one_shot", "surge_xt_fxp", "dawdreamer_plugin", "sfz_instrument")
+    elif renderer_profile == "plugin_v1":
+        renderers = ("surge_xt_fxp", "dawdreamer_plugin", "wav_one_shot", "sfz_instrument")
     else:
-        renderers = ("wav_one_shot", "sfz_instrument", "dawdreamer_plugin")
-    candidates = [
-        entry
-        for renderer in renderers
-        for entry in catalog.candidates(source_type, renderer)
-        if _asset_matches_tags(entry, include_tags, exclude_tags)
-        and entry.asset_id not in exclude_asset_ids
-    ]
+        renderers = ("wav_one_shot", "sfz_instrument", "surge_xt_fxp", "dawdreamer_plugin")
+    candidates: list[AssetEntry] = []
+    for renderer in renderers:
+        candidates = [
+            entry
+            for entry in catalog.candidates(source_type, renderer)
+            if _asset_matches_tags(entry, include_tags, exclude_tags)
+            and _asset_unique_key(entry) not in exclude_asset_keys
+        ]
+        if candidates:
+            break
     if not candidates:
         return None
     weights = np.array([max(float(entry.weight), 0.0) for entry in candidates], dtype=np.float64)
@@ -767,6 +833,15 @@ def _choose_asset_for_source(
         raise ValueError(f"Asset candidates for {source_type!r} all have non-positive weight")
     index = int(rng.choice(len(candidates), p=weights / weights.sum()))
     return candidates[index]
+
+
+def _asset_unique_key(entry: AssetEntry) -> str:
+    audio_hash = entry.metadata.get("audio_sha256")
+    if isinstance(audio_hash, str) and audio_hash:
+        return f"audio:{audio_hash}"
+    if entry.preset_path:
+        return f"preset:{Path(entry.preset_path).as_posix().lower()}"
+    return f"asset:{entry.asset_id}"
 
 
 def _asset_matches_tags(
@@ -979,13 +1054,16 @@ def _make_events(
     event_index = 0
     percussion_template = (
         str(rng.choice(PERCUSSION_RHYTHM_TEMPLATES))
-        if composition_profile == "percussion_v1"
+        if composition_profile in {"percussion_v1", "surge_patches_v1"}
         else "edm_v1"
     )
     for source in sources:
         recipe = _procedural_recipe_for_source(source)
         rhythm_subdivision = int(rng.choice(RHYTHM_SUBDIVISIONS))
-        if composition_profile == "percussion_v1":
+        if composition_profile == "percussion_v1" or (
+            composition_profile == "surge_patches_v1"
+            and source.source_type in PERCUSSION_SOURCE_TYPES
+        ):
             onsets, length, rhythm_subdivision = _percussion_profile_events(
                 rng,
                 source.source_type,
@@ -996,6 +1074,23 @@ def _make_events(
                 percussion_template,
             )
             length = _asset_aware_percussion_length(source, length, duration)
+            onsets = _thin_same_track_overlaps(
+                rng,
+                onsets,
+                source.source_type,
+                length,
+                duration,
+                percussion_template,
+            )
+        elif composition_profile == "surge_patches_v1":
+            onsets, held_length, rhythm_subdivision = _surge_patch_events(
+                rng,
+                source,
+                duration,
+                beat,
+            )
+            attack, release = _surge_source_envelope(source)
+            length = held_length + attack + release
             onsets = _thin_same_track_overlaps(
                 rng,
                 onsets,
@@ -1082,8 +1177,17 @@ def _make_events(
                 continue
             offset = min(duration, float(onset + length))
             attack, release = _event_envelope_labels(source, recipe, offset - float(onset), rng)
+            if attack + release > offset - float(onset):
+                release = max(0.0, offset - float(onset) - attack)
             note = None
-            if source.source_type in {"synth_bass", "electric_bass", "acoustic_bass"}:
+            if source.renderer == "surge_xt_fxp":
+                note_pool = (
+                    bass_note_pool
+                    if source.source_type in {"synth_bass", "electric_bass", "acoustic_bass"}
+                    else lead_note_pool
+                )
+                note = int(rng.choice(_notes_in_asset_range(source, note_pool)))
+            elif source.source_type in {"synth_bass", "electric_bass", "acoustic_bass"}:
                 note = _choose_bass_note(
                     rng,
                     _notes_in_asset_range(source, bass_note_pool),
@@ -1248,11 +1352,62 @@ def _asset_aware_percussion_length(
     return min(clip_duration, max(fallback_length, float(asset_duration)))
 
 
+def _surge_patch_events(
+    rng: np.random.Generator,
+    source: SourceMetadata,
+    duration: float,
+    beat: float,
+) -> tuple[np.ndarray, float, int]:
+    if source.source_type == "synth_bass":
+        subdivision = int(rng.choice([1, 2, 3, 4]))
+        onsets = _random_grid_onsets(
+            rng,
+            duration,
+            beat,
+            subdivision,
+            density=float(rng.uniform(0.18, 0.42)),
+            force_downbeats=True,
+        )
+        held_length = beat * float(rng.choice([0.75, 1.0, 1.5, 2.0]))
+    elif source.source_type in {"pad_chord", "organ", "string_stab", "brass_stab"}:
+        subdivision = 1
+        onsets = _random_grid_onsets(
+            rng,
+            duration,
+            beat,
+            subdivision,
+            density=float(rng.uniform(0.08, 0.22)),
+            force_downbeats=True,
+        )
+        held_length = beat * float(rng.choice([2.0, 3.0, 4.0, 6.0]))
+    else:
+        subdivision = int(rng.choice([2, 3, 4, 6]))
+        onsets = _random_grid_onsets(
+            rng,
+            duration,
+            beat,
+            subdivision,
+            density=float(rng.uniform(0.22, 0.58)),
+            force_downbeats=False,
+        )
+        held_length = beat / subdivision * float(rng.uniform(1.0, 3.0))
+    return onsets, held_length, subdivision
+
+
+def _surge_source_envelope(source: SourceMetadata) -> tuple[float, float]:
+    return (
+        float(source.synth_parameters["surge_amp_attack_seconds"]),
+        float(source.synth_parameters["surge_amp_release_seconds"]),
+    )
+
+
 def _event_envelope_labels(
     source: SourceMetadata, recipe: SourceType, event_duration: float, rng: np.random.Generator
 ) -> tuple[float, float]:
     if source.renderer == "wav_one_shot":
-        return 0.0, max(0.0, event_duration)
+        return 0.0, 0.0
+    if source.renderer == "surge_xt_fxp":
+        return _surge_source_envelope(source)
     attack = {
         "kick": 0.002,
         "snare_clap": 0.003,
@@ -1480,6 +1635,8 @@ def _render_source(
         return _render_sfz_instrument(source, events, sample_rate, duration)
     if source.renderer == "dawdreamer_plugin":
         return render_dawdreamer_source(source, events, sample_rate, duration)
+    if source.renderer == "surge_xt_fxp":
+        return render_surge_fxp_source(source, events, sample_rate, duration)
     total_samples = int(round(sample_rate * duration))
     mono = np.zeros(total_samples, dtype=np.float32)
     render_source = source.model_copy(update={"source_type": _procedural_recipe_for_source(source)})

@@ -28,6 +28,12 @@ assets/library/auditions/
 *.tar
 *.tar.gz
 
+# Local plugin installers and binaries.
+tools/surge_vst2_1.6.6/
+*.dll
+*.vst3
+*.exe
+
 # Training and model artifacts.
 *.pt
 *.pth

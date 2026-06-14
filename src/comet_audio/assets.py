@@ -158,6 +158,57 @@ PERCUSSION_BUCKET_KEYWORDS: tuple[tuple[SourceType, tuple[str, ...]], ...] = (
     ("tom", ("tom", "floor", "rack")),
     ("percussion", ("perc", "percussion", "foley", "wood", "rim", "clave", "shaker")),
 )
+PERCUSSION_SOURCE_TYPES: tuple[SourceType, ...] = (
+    "kick",
+    "snare",
+    "clap",
+    "closed_hat",
+    "open_hat",
+    "cymbal",
+    "tom",
+    "percussion",
+)
+SURGE_PATCH_LIBRARY_ROOTS: tuple[tuple[str, Path], ...] = (
+    ("factory", Path(r"C:\ProgramData\Surge XT\patches_factory")),
+    ("thirdparty", Path(r"C:\ProgramData\Surge XT\patches_3rdparty")),
+)
+SURGE_EXCLUDED_CATEGORIES = {
+    "arp",
+    "arps",
+    "audio in",
+    "delay",
+    "delays",
+    "effect",
+    "effects",
+    "fx",
+    "reverb",
+    "reverbs",
+    "rhythm",
+    "rhythms",
+    "sequence",
+    "sequences",
+    "template",
+    "templates",
+    "tutorial",
+    "tutorials",
+    "vocoder",
+}
+SURGE_SOURCE_TYPE_BY_CATEGORY: tuple[tuple[SourceType, tuple[str, ...]], ...] = (
+    ("synth_bass", ("bass", "basses", "sub")),
+    ("synth_lead", ("lead", "leads")),
+    ("synth_pluck", ("pluck", "plucks")),
+    (
+        "pad_chord",
+        ("pad", "pads", "chord", "chords", "poly", "polysynth", "polysynths", "synth", "synths"),
+    ),
+    ("brass_stab", ("brass",)),
+    ("organ", ("organ", "organs")),
+    ("piano", ("key", "keys", "piano", "pianos")),
+    ("guitar_pluck", ("guitar", "guitars")),
+    ("mallet", ("mallet", "mallets", "bell", "bells")),
+    ("string_stab", ("string", "strings")),
+    ("percussion", ("drum", "drums", "percussion", "perc")),
+)
 
 
 @dataclass(frozen=True)
@@ -231,15 +282,92 @@ def validate_asset_catalog(root: Path) -> list[str]:
                             warnings.append(
                                 f"{entry.asset_id}: unreadable SFZ sample {sample_path}: {exc}"
                             )
-        elif entry.renderer == "dawdreamer_plugin":
+        elif entry.renderer in {"dawdreamer_plugin", "surge_xt_fxp"}:
             preset_path = catalog.resolve_preset_path(entry)
+            plugin_path = catalog.resolve_path(entry)
+            if not plugin_path.exists():
+                warnings.append(f"{entry.asset_id}: missing plugin file {plugin_path}")
             if preset_path is None:
                 warnings.append(f"{entry.asset_id}: missing preset_path")
             elif not preset_path.exists():
-                warnings.append(f"{entry.asset_id}: missing preset state {preset_path}")
+                warnings.append(f"{entry.asset_id}: missing preset file {preset_path}")
+            elif entry.renderer == "surge_xt_fxp" and preset_path.suffix.lower() != ".fxp":
+                warnings.append(f"{entry.asset_id}: Surge XT preset must be .fxp: {preset_path}")
         if entry.weight <= 0:
             warnings.append(f"{entry.asset_id}: weight must be greater than 0")
     return warnings
+
+
+def index_surge_patches(
+    assets_root: Path,
+    plugin_path: Path,
+    patch_roots: tuple[tuple[str, Path], ...] = SURGE_PATCH_LIBRARY_ROOTS,
+    catalog_path: Path | None = None,
+    asset_prefix: str = "surge_xt",
+) -> list[AssetEntry]:
+    """Index installed Surge XT .fxp files by reference without copying preset files."""
+    assets_root = assets_root.resolve()
+    plugin_path = plugin_path.resolve()
+    if not plugin_path.exists():
+        raise FileNotFoundError(f"Surge XT VST3 does not exist: {plugin_path}")
+
+    entries: list[AssetEntry] = []
+    seen_paths: set[Path] = set()
+    for library_kind, root in patch_roots:
+        root = root.resolve()
+        if not root.exists():
+            raise FileNotFoundError(f"Surge XT patch root does not exist: {root}")
+        for preset_path in sorted(root.rglob("*.fxp")):
+            preset_path = preset_path.resolve()
+            if (
+                preset_path in seen_paths
+                or _surge_patch_is_excluded(root, preset_path)
+                or not _is_ascii_path(preset_path)
+            ):
+                continue
+            seen_paths.add(preset_path)
+            relative = preset_path.relative_to(root)
+            category = _surge_patch_category(library_kind, relative)
+            source_type = _classify_surge_source_type(relative)
+            asset_slug = _slugify_asset_component(
+                f"{asset_prefix}_{library_kind}_{'_'.join(relative.with_suffix('').parts)}"
+            )
+            tags = [
+                "surge",
+                "synth_patch",
+                library_kind,
+                f"category:{_slugify_asset_component(category)}",
+            ]
+            if source_type in PERCUSSION_SOURCE_TYPES:
+                tags.extend(["percussion", f"bucket:{source_type}"])
+            entries.append(
+                AssetEntry(
+                    asset_id=asset_slug,
+                    renderer="surge_xt_fxp",
+                    family=_surge_family(source_type),
+                    source_type=source_type,
+                    instrument="surge_xt",
+                    articulation=_surge_articulation(source_type),
+                    path=_catalog_path(assets_root, plugin_path),
+                    preset_path=_catalog_path(assets_root, preset_path),
+                    tags=sorted(set(tags)),
+                    weight=1.0,
+                    note_min=24 if source_type == "synth_bass" else 36,
+                    note_max=55 if source_type == "synth_bass" else 96,
+                    root_key=36 if source_type == "synth_bass" else 60,
+                    default_gain_db=-10.0,
+                    metadata={
+                        "surge_library": library_kind,
+                        "surge_category": category,
+                        "source_preset_path": str(preset_path),
+                    },
+                )
+            )
+
+    _replace_renderer_catalog_entries(
+        catalog_path or assets_root / "catalog.json", entries, renderer="surge_xt_fxp"
+    )
+    return entries
 
 
 def load_mono_wav(path: Path) -> tuple[np.ndarray, int]:
@@ -446,6 +574,23 @@ def _upsert_catalog_entries(catalog_path: Path, entries: list[AssetEntry]) -> No
     )
 
 
+def _replace_renderer_catalog_entries(
+    catalog_path: Path, entries: list[AssetEntry], renderer: RendererType
+) -> None:
+    catalog_path.parent.mkdir(parents=True, exist_ok=True)
+    existing: list[dict[str, Any]] = []
+    if catalog_path.exists():
+        payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+        rows = payload if isinstance(payload, list) else payload.get("assets", [])
+        existing.extend(dict(row) for row in rows if row.get("renderer") != renderer)
+    next_rows = existing + [entry.model_dump(mode="json", exclude_none=True) for entry in entries]
+    next_rows.sort(key=lambda row: str(row["asset_id"]))
+    catalog_path.write_text(
+        json.dumps({"assets": next_rows}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _stats(values: list[float]) -> dict[str, float]:
     if not values:
         return {"min": 0.0, "max": 0.0, "mean": 0.0}
@@ -470,6 +615,87 @@ def _default_import_gain(source_type: SourceType) -> float:
     if source_type in {"closed_hat", "open_hat", "cymbal"}:
         return -12.0
     return -10.0
+
+
+def _surge_patch_is_excluded(root: Path, preset_path: Path) -> bool:
+    relative_parts = preset_path.relative_to(root).with_suffix("").parts
+    normalized_parts = {_normalize_category(part) for part in relative_parts}
+    if normalized_parts & SURGE_EXCLUDED_CATEGORIES:
+        return True
+    text = " ".join(normalized_parts)
+    return any(
+        fragment in text
+        for fragment in ("sound fx", "sound effect", "audio input", "reverb", "delay")
+    )
+
+
+def _surge_patch_category(library_kind: str, relative: Path) -> str:
+    parts = relative.parts
+    if library_kind == "thirdparty" and len(parts) >= 3:
+        return parts[1]
+    if parts:
+        return parts[0]
+    return "unknown"
+
+
+def _classify_surge_source_type(relative: Path) -> SourceType:
+    parts = tuple(_normalize_category(part) for part in relative.with_suffix("").parts)
+    text = " ".join(parts)
+    if any(keyword in text for keyword in ("kick", "bass drum", "bassdrum")):
+        return "kick"
+    if "snare" in text:
+        return "snare"
+    if "clap" in text:
+        return "clap"
+    if any(keyword in text for keyword in ("closed hat", "closedhat", "hatclosed", "chh")):
+        return "closed_hat"
+    if any(keyword in text for keyword in ("open hat", "openhat", "hatopen", "ohh")):
+        return "open_hat"
+    if any(keyword in text for keyword in ("cymbal", "crash", "ride")):
+        return "cymbal"
+    if "tom" in text:
+        return "tom"
+    for source_type, categories in SURGE_SOURCE_TYPE_BY_CATEGORY:
+        if any(category in parts or category in text for category in categories):
+            return source_type
+    return "synth_lead"
+
+
+def _surge_family(source_type: SourceType) -> str:
+    if source_type in {"kick", "snare", "clap", "closed_hat", "open_hat", "cymbal", "tom"}:
+        return "drums"
+    if source_type == "percussion":
+        return "percussion"
+    if source_type == "synth_bass":
+        return "bass"
+    return "synth"
+
+
+def _surge_articulation(source_type: SourceType) -> str:
+    if source_type in PERCUSSION_SOURCE_TYPES:
+        return "hit"
+    if source_type in {"pad_chord", "organ"}:
+        return "held"
+    return "held"
+
+
+def _normalize_category(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def _is_ascii_path(path: Path) -> bool:
+    try:
+        str(path).encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _catalog_path(root: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return path.resolve().as_posix()
 
 
 def parse_sfz(path: Path) -> tuple[list[SfzRegion], list[str]]:

@@ -9,7 +9,7 @@ These instructions apply to this repository.
 - When planning for user approval, list the files expected to be affected.
 - Ask relevant questions when requirements are ambiguous or when a choice changes the generator, metadata schema, training targets, or dataset layout.
 - Do not write or add tests unless specifically requested. If existing tests must be updated because the user requested a behavior change, keep those edits tightly scoped.
-- After implementing code changes, run `uv run ruff format`, `uv run ruff check .`, and `uv run pytest`. Fix regressions. These checks are not necessary for docs-only changes, example-only changes, or other edits unaffected by checks.
+- After implementing a plan, run `uv run ruff format`, `uv run ruff check .`, and `uv run pytest`. Fix regressions. These checks are not necessary for docs-only changes, example-only changes, or other edits unaffected by checks.
 
 ## Codebase Principles
 

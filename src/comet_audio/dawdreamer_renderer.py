@@ -43,6 +43,40 @@ def render_dawdreamer_source(
     return audio.astype(np.float32)
 
 
+def render_surge_fxp_source(
+    source: SourceMetadata,
+    events: list[EventMetadata],
+    sample_rate: int,
+    duration: float,
+    buffer_size: int = DEFAULT_BUFFER_SIZE,
+) -> np.ndarray:
+    plugin_path = Path(str(source.synth_parameters["plugin_path"]))
+    preset_path = Path(str(source.synth_parameters["preset_path"]))
+    _require_existing_file(plugin_path, "Surge XT VST3 plugin")
+    _require_existing_file(preset_path, "Surge XT preset")
+    if preset_path.suffix.lower() != ".fxp":
+        raise ValueError(f"Surge XT preset must be an .fxp file: {preset_path}")
+    daw = _import_dawdreamer()
+
+    engine = daw.RenderEngine(sample_rate, buffer_size)
+    synth = engine.make_plugin_processor(source.source_id, plugin_path.as_posix())
+    load_preset = getattr(synth, "load_preset", None)
+    if load_preset is None:
+        raise RuntimeError("DawDreamer plugin processor does not support load_preset()")
+    if load_preset(preset_path.as_posix()) is False:
+        raise RuntimeError(f"Failed to load Surge XT preset for {source.source_id}: {preset_path}")
+    _configure_surge_patch(synth, source)
+    synth.clear_midi()
+    for event in events:
+        _add_event_note(synth, source, event)
+    engine.load_graph([(synth, [])])
+    engine.render(float(duration))
+    audio = _as_mono(engine.get_audio(), sample_rate, duration)
+    audio *= db_to_amp(source.gain_db)
+    _require_finite_signal(audio, f"Surge XT render for {source.source_id}")
+    return audio.astype(np.float32)
+
+
 def capture_plugin_preset(
     assets_root: Path,
     plugin_path: Path,
@@ -301,8 +335,89 @@ def _add_event_note(synth: Any, source: SourceMetadata, event: EventMetadata) ->
     note = int(event.midi_note or source.synth_parameters.get("asset_root_key") or 60)
     velocity = int(round(np.clip(float(event.velocity), 0.0, 1.0) * 127))
     start_time = float(event.onset_seconds)
-    duration = max(0.001, float(event.offset_seconds - event.onset_seconds))
-    synth.add_midi_note(note, velocity, start_time, duration)
+    note_off = max(start_time, float(event.offset_seconds) - float(event.release_seconds))
+    synth.add_midi_note(note, velocity, start_time, max(0.001, note_off - start_time))
+
+
+def _configure_surge_patch(synth: Any, source: SourceMetadata) -> None:
+    _set_first_available_parameter(synth, ("FX Disable", "FX Bypass"), 1.0)
+    if _has_parameter(synth, "FX Chain Bypass"):
+        _set_parameter_by_name(synth, "FX Chain Bypass", 1.0)
+    attack = float(source.synth_parameters["surge_amp_attack_seconds"])
+    release = float(source.synth_parameters["surge_amp_release_seconds"])
+    if _has_parameter(synth, "A Amp EG Attack"):
+        for name in ("A Amp EG Attack", "B Amp EG Attack"):
+            _set_parameter_seconds_by_name(synth, name, attack)
+        for name in ("A Amp EG Release", "B Amp EG Release"):
+            _set_parameter_seconds_by_name(synth, name, release)
+    else:
+        _set_all_parameters_seconds_by_name(synth, "AEG Attack", attack)
+        _set_all_parameters_seconds_by_name(synth, "AEG Release", release)
+
+
+def _set_first_available_parameter(synth: Any, names: tuple[str, ...], value: float) -> None:
+    for name in names:
+        if _has_parameter(synth, name):
+            _set_parameter_by_name(synth, name, value)
+            return
+    raise RuntimeError(f"None of the Surge parameters were found: {', '.join(names)}")
+
+
+def _set_parameter_by_name(synth: Any, name: str, value: float) -> None:
+    index = _parameter_index(synth, name)
+    synth.set_parameter(index, float(np.clip(value, 0.0, 1.0)))
+
+
+def _set_parameter_seconds_by_name(synth: Any, name: str, seconds: float) -> None:
+    index = _parameter_index(synth, name)
+    _set_parameter_seconds(synth, index, name, seconds)
+
+
+def _set_all_parameters_seconds_by_name(synth: Any, name: str, seconds: float) -> None:
+    indices = _parameter_indices(synth, name)
+    if not indices:
+        raise RuntimeError(f"Surge parameter {name!r} was not found")
+    for index in indices:
+        _set_parameter_seconds(synth, index, name, seconds)
+
+
+def _set_parameter_seconds(synth: Any, index: int, name: str, seconds: float) -> None:
+    ranges = synth.get_parameter_range(index)
+    if not isinstance(ranges, dict) or not ranges:
+        raise RuntimeError(f"Surge parameter {name!r} does not expose a second-based range")
+    best_value: float | None = None
+    best_error: float | None = None
+    for normalized_range, real_value in ranges.items():
+        if not isinstance(normalized_range, tuple) or len(normalized_range) != 2:
+            continue
+        low, high = float(normalized_range[0]), float(normalized_range[1])
+        candidate = (low + high) * 0.5
+        error = abs(float(real_value) - seconds)
+        if best_error is None or error < best_error:
+            best_value = candidate
+            best_error = error
+    if best_value is None:
+        raise RuntimeError(f"Surge parameter {name!r} has an unsupported range shape")
+    synth.set_parameter(index, float(np.clip(best_value, 0.0, 1.0)))
+
+
+def _parameter_index(synth: Any, name: str) -> int:
+    indices = _parameter_indices(synth, name)
+    if indices:
+        return indices[0]
+    raise RuntimeError(f"Surge parameter {name!r} was not found")
+
+
+def _parameter_indices(synth: Any, name: str) -> list[int]:
+    return [
+        index
+        for index in range(int(synth.get_plugin_parameter_size()))
+        if synth.get_parameter_name(index) == name
+    ]
+
+
+def _has_parameter(synth: Any, name: str) -> bool:
+    return bool(_parameter_indices(synth, name))
 
 
 def _as_mono(audio: np.ndarray, sample_rate: int, duration: float) -> np.ndarray:

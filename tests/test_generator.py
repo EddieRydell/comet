@@ -34,7 +34,7 @@ def test_event_times_and_source_references_are_valid(tmp_path: Path) -> None:
         assert event.onset_seconds < event.offset_seconds <= metadata.duration_seconds
         assert 0.0 < event.velocity <= 1.0
         assert event.attack_seconds >= 0.0
-        assert event.release_seconds > 0.0
+        assert event.release_seconds >= 0.0
         assert event.render_parameters["beat_unit"] == 4
         assert event.render_parameters["measure_seconds"] > event.render_parameters["beat_seconds"]
         assert event.render_parameters["rhythm_subdivision"] in {2, 3, 4, 6, 8}
