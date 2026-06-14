@@ -11,10 +11,13 @@ from comet_audio.models import BatchManifestEntry
 from comet_audio.training import (
     HOP_LENGTH,
     SAMPLE_RATE,
+    CNNTCNSlotModel,
     CNNTCNTimingModel,
     CometTimingDataset,
     DatasetItem,
+    build_anonymous_slot_targets,
     build_targets,
+    compute_anonymous_slot_loss,
     compute_loss,
     frame_count,
     load_manifest,
@@ -153,6 +156,47 @@ def test_one_tiny_cpu_training_step_computes_finite_loss_and_updates(tmp_path: P
 
     assert torch.isfinite(loss)
     assert not torch.equal(before, next(model.parameters()).detach())
+
+
+def test_anonymous_slot_model_uses_phase_and_activity_loss(tmp_path: Path) -> None:
+    config = GeneratorConfig(sample_rate=SAMPLE_RATE, duration_seconds=1.0)
+    generate_batch(
+        tmp_path / "training",
+        count=2,
+        seed=303,
+        config=config,
+        write_visualizer=False,
+        write_stems=False,
+        flat_layout=True,
+    )
+    item = load_manifest(tmp_path / "training")[0]
+    metadata = load_metadata(item.metadata_path)
+    targets = build_anonymous_slot_targets(metadata, num_frames=frame_count(SAMPLE_RATE))
+
+    assert "slot_phase" in targets
+    assert "slot_activity" in targets
+    assert targets["slot_phase"].shape == targets["slot_attack"].shape
+    assert targets["slot_activity"].shape == targets["slot_mask"].shape
+
+    dataset = CometTimingDataset(
+        tmp_path / "training",
+        "train",
+        training=True,
+        crop_seconds=1.0,
+        target="anonymous_slots_v1",
+        max_tracks=4,
+    )
+    batch = next(iter(DataLoader(dataset, batch_size=1)))
+    model = CNNTCNSlotModel(max_tracks=4)
+    outputs = model(batch["waveform"])
+    loss, metrics = compute_anonymous_slot_loss(outputs, batch)
+
+    assert outputs["slot_phase"].shape[:3] == (1, 4, 4)
+    assert outputs["slot_activity"].shape == (1, 4)
+    assert torch.isfinite(loss)
+    assert metrics["slot_phase_loss"] >= 0.0
+    assert metrics["slot_unused_off_loss"] >= 0.0
+    assert metrics["slot_activity_loss"] >= 0.0
 
 
 def test_evaluation_matching_scores_unique_duplicate_onsets_once() -> None:

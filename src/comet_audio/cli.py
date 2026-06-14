@@ -620,6 +620,10 @@ def train(
         int,
         typer.Option(min=1, help="Maximum anonymous track slots for anonymous_slots_v1."),
     ] = 16,
+    crop_seconds: Annotated[
+        float,
+        typer.Option(min=0.1, help="Training crop length in seconds."),
+    ] = 4.0,
 ) -> None:
     """Train the CNN+TCN V1 global event-timing detector."""
     if target not in {"source_types_v1", "anonymous_slots_v1"}:
@@ -633,6 +637,7 @@ def train(
         learning_rate=learning_rate,
         target=target,  # type: ignore[arg-type]
         max_tracks=max_tracks,
+        crop_seconds=crop_seconds,
     )
     typer.echo(f"Training complete. Checkpoints and metrics written to {run}")
 

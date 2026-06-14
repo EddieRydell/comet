@@ -1172,13 +1172,18 @@ def _make_events(
             onsets = np.array([max(0.0, duration - float(rng.uniform(1.8, 3.2)))])
             length = duration - float(onsets[0])
 
-        for onset in onsets:
+        next_available_onset = 0.0
+        for onset in sorted(float(value) for value in onsets):
             if onset >= duration:
+                continue
+            if onset + 1e-6 < next_available_onset:
                 continue
             offset = min(duration, float(onset + length))
             attack, release = _event_envelope_labels(source, recipe, offset - float(onset), rng)
             if attack + release > offset - float(onset):
                 release = max(0.0, offset - float(onset) - attack)
+            if offset <= onset:
+                continue
             note = None
             if source.renderer == "surge_xt_fxp":
                 note_pool = (
@@ -1227,6 +1232,7 @@ def _make_events(
                     },
                 )
             )
+            next_available_onset = offset
             event_index += 1
     return events
 

@@ -29,6 +29,11 @@ DEFAULT_EPOCHS = 40
 DEFAULT_BATCH_SIZE = 16
 SOURCE_TYPE_TO_INDEX = {source_type: index for index, source_type in enumerate(SOURCE_TYPES)}
 TrainingTarget = Literal["source_types_v1", "anonymous_slots_v1"]
+SLOT_PHASE_OFF = 0
+SLOT_PHASE_ATTACK = 1
+SLOT_PHASE_HELD = 2
+SLOT_PHASE_RELEASE = 3
+SLOT_PHASE_WEIGHTS = torch.tensor([0.08, 5.0, 0.9, 2.0], dtype=torch.float32)
 
 SplitName = Literal["train", "val", "test"]
 
@@ -230,6 +235,7 @@ def build_anonymous_slot_targets(
     slot_attack = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
     slot_held = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
     slot_release = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
+    slot_phase = torch.zeros(max_tracks, num_frames, dtype=torch.long)
     slot_mask = torch.zeros(max_tracks, dtype=torch.float32)
     sources = metadata.sources[:max_tracks]
     source_to_slot = {source.source_id: index for index, source in enumerate(sources)}
@@ -255,11 +261,23 @@ def build_anonymous_slot_targets(
             slot_release[slot_index],
             ((frame_times >= release_start) & (frame_times <= offset)).float(),
         )
+        slot_phase[slot_index][(frame_times >= attack_end) & (frame_times < release_start)] = (
+            SLOT_PHASE_HELD
+        )
+        slot_phase[slot_index][(frame_times >= release_start) & (frame_times <= offset)] = (
+            SLOT_PHASE_RELEASE
+        )
+        slot_phase[slot_index][(frame_times >= onset) & (frame_times < attack_end)] = (
+            SLOT_PHASE_ATTACK
+        )
+    slot_activity = (slot_attack + slot_held + slot_release).amax(dim=-1).clamp(0.0, 1.0)
     return {
         "slot_attack": slot_attack.clamp(0.0, 1.0),
         "slot_held": slot_held.clamp(0.0, 1.0),
         "slot_release": slot_release.clamp(0.0, 1.0),
+        "slot_phase": slot_phase,
         "slot_mask": slot_mask,
+        "slot_activity": slot_activity,
     }
 
 
@@ -349,7 +367,8 @@ class CNNTCNSlotModel(nn.Module):
             nn.SiLU(),
         )
         self.tcn = nn.Sequential(*[ResidualTCNBlock(channels, dilation=2**idx) for idx in range(7)])
-        self.slot_head = nn.Conv1d(channels, max_tracks * 3, kernel_size=1)
+        self.slot_head = nn.Conv1d(channels, max_tracks * 4, kernel_size=1)
+        self.slot_activity_head = nn.Linear(channels, max_tracks)
 
     def forward(self, waveform: Tensor) -> dict[str, Tensor]:
         if waveform.ndim == 1:
@@ -360,11 +379,14 @@ class CNNTCNSlotModel(nn.Module):
         features = self.tcn(features)
         logits = self.slot_head(features)
         batch, _, time = logits.shape
-        slots = logits.reshape(batch, self.max_tracks, 3, time)
+        slots = logits.reshape(batch, self.max_tracks, 4, time)
+        slot_activity = self.slot_activity_head(features.mean(dim=-1))
         return {
-            "slot_attack": slots[:, :, 0],
-            "slot_held": slots[:, :, 1],
-            "slot_release": slots[:, :, 2],
+            "slot_phase": slots,
+            "slot_activity": slot_activity,
+            "slot_attack": slots[:, :, SLOT_PHASE_ATTACK],
+            "slot_held": slots[:, :, SLOT_PHASE_HELD],
+            "slot_release": slots[:, :, SLOT_PHASE_RELEASE],
         }
 
 
@@ -391,6 +413,23 @@ def focal_bce_with_logits(logits: Tensor, targets: Tensor, gamma: float = 2.0) -
     probability = torch.sigmoid(logits)
     pt = probability * targets + (1.0 - probability) * (1.0 - targets)
     return (bce * (1.0 - pt).pow(gamma)).mean()
+
+
+def focal_cross_entropy(
+    logits: Tensor,
+    targets: Tensor,
+    weights: Tensor,
+    gamma: float = 1.5,
+) -> Tensor:
+    ce = torch.nn.functional.cross_entropy(
+        logits,
+        targets,
+        weight=weights.to(logits.device),
+        reduction="none",
+    )
+    probabilities = torch.softmax(logits, dim=1)
+    pt = probabilities.gather(1, targets.unsqueeze(1)).squeeze(1).clamp(1e-6, 1.0)
+    return (ce * (1.0 - pt).pow(gamma)).mean()
 
 
 def compute_loss(
@@ -428,84 +467,119 @@ def compute_anonymous_slot_loss(
     predictions: dict[str, Tensor],
     batch: dict[str, Tensor],
 ) -> tuple[Tensor, dict[str, float]]:
-    time = min(predictions["slot_attack"].shape[-1], batch["slot_attack"].shape[-1])
+    time = min(predictions["slot_phase"].shape[-1], batch["slot_phase"].shape[-1])
     pred = {key: value[..., :time] for key, value in predictions.items()}
     target = {
-        key: value[..., :time]
+        key: value[..., :time] if value.ndim >= 3 else value
         for key, value in batch.items()
-        if key in {"slot_attack", "slot_held", "slot_release"}
+        if key in {"slot_attack", "slot_held", "slot_release", "slot_phase", "slot_activity"}
     }
     assignments = _slot_assignments(pred, target)
-    attack_losses: list[Tensor] = []
-    held_losses: list[Tensor] = []
-    release_losses: list[Tensor] = []
+    phase_losses: list[Tensor] = []
+    unused_off_losses: list[Tensor] = []
+    activity_losses: list[Tensor] = []
+    weights = SLOT_PHASE_WEIGHTS.to(pred["slot_phase"].device)
     for batch_index, assignment in enumerate(assignments):
-        pred_indices = torch.as_tensor(
-            [pair[0] for pair in assignment], device=pred["slot_attack"].device
-        )
-        target_indices = torch.as_tensor(
-            [pair[1] for pair in assignment], device=pred["slot_attack"].device
-        )
-        attack_losses.append(
-            focal_bce_with_logits(
-                pred["slot_attack"][batch_index, pred_indices],
-                target["slot_attack"][batch_index, target_indices],
+        matched_pred_indices = [pair[0] for pair in assignment]
+        matched_target_indices = [pair[1] for pair in assignment]
+        if matched_pred_indices:
+            pred_indices = torch.as_tensor(matched_pred_indices, device=pred["slot_phase"].device)
+            target_indices = torch.as_tensor(
+                matched_target_indices, device=pred["slot_phase"].device
             )
-        )
-        held_losses.append(
+            phase_losses.append(
+                focal_cross_entropy(
+                    pred["slot_phase"][batch_index, pred_indices],
+                    target["slot_phase"][batch_index, target_indices].long(),
+                    weights=weights,
+                )
+            )
+        unmatched_pred_indices = [
+            index
+            for index in range(pred["slot_phase"].shape[1])
+            if index not in set(matched_pred_indices)
+        ]
+        if unmatched_pred_indices:
+            pred_indices = torch.as_tensor(unmatched_pred_indices, device=pred["slot_phase"].device)
+            off_targets = torch.zeros(
+                len(unmatched_pred_indices),
+                time,
+                dtype=torch.long,
+                device=pred["slot_phase"].device,
+            )
+            unused_off_losses.append(
+                focal_cross_entropy(
+                    pred["slot_phase"][batch_index, pred_indices],
+                    off_targets,
+                    weights=weights,
+                )
+            )
+        activity_targets = torch.zeros_like(pred["slot_activity"][batch_index])
+        if matched_pred_indices:
+            activity_targets[
+                torch.as_tensor(matched_pred_indices, device=activity_targets.device)
+            ] = 1.0
+        activity_losses.append(
             torch.nn.functional.binary_cross_entropy_with_logits(
-                pred["slot_held"][batch_index, pred_indices],
-                target["slot_held"][batch_index, target_indices],
+                pred["slot_activity"][batch_index],
+                activity_targets,
             )
         )
-        release_losses.append(
-            focal_bce_with_logits(
-                pred["slot_release"][batch_index, pred_indices],
-                target["slot_release"][batch_index, target_indices],
-            )
-        )
-    attack_loss = torch.stack(attack_losses).mean()
-    held_loss = torch.stack(held_losses).mean()
-    release_loss = torch.stack(release_losses).mean()
-    total = attack_loss + 0.6 * held_loss + release_loss
+    zero = pred["slot_phase"].sum() * 0.0
+    phase_loss = torch.stack(phase_losses).mean() if phase_losses else zero
+    unused_off_loss = torch.stack(unused_off_losses).mean() if unused_off_losses else zero
+    activity_loss = torch.stack(activity_losses).mean() if activity_losses else zero
+    total = phase_loss + 0.5 * unused_off_loss + 0.2 * activity_loss
     return total, {
         "loss": float(total.detach().cpu()),
-        "slot_attack_loss": float(attack_loss.detach().cpu()),
-        "slot_held_loss": float(held_loss.detach().cpu()),
-        "slot_release_loss": float(release_loss.detach().cpu()),
+        "slot_phase_loss": float(phase_loss.detach().cpu()),
+        "slot_unused_off_loss": float(unused_off_loss.detach().cpu()),
+        "slot_activity_loss": float(activity_loss.detach().cpu()),
     }
 
 
 def _slot_assignments(
     predictions: dict[str, Tensor], targets: dict[str, Tensor]
 ) -> list[list[tuple[int, int]]]:
-    batch_size, slot_count, _time = predictions["slot_attack"].shape
+    batch_size, slot_count, _classes, _time = predictions["slot_phase"].shape
     rows: list[list[tuple[int, int]]] = []
     with torch.no_grad():
-        pred_prob = {
-            key: torch.sigmoid(value).float().detach().cpu() for key, value in predictions.items()
-        }
-        target_cpu = {key: value.detach().cpu() for key, value in targets.items()}
+        pred_phase_prob = torch.softmax(predictions["slot_phase"], dim=2).float().detach().cpu()
+        target_phase = targets["slot_phase"].detach().cpu().long()
+        target_activity = targets["slot_activity"].detach().cpu()
+        weights = SLOT_PHASE_WEIGHTS.cpu()
         for batch_index in range(batch_size):
-            cost = torch.zeros(slot_count, slot_count, dtype=torch.float32)
+            active_targets = [
+                index
+                for index in range(slot_count)
+                if float(target_activity[batch_index, index]) >= 0.5
+            ]
+            if not active_targets:
+                rows.append([])
+                continue
+            cost = torch.zeros(slot_count, len(active_targets), dtype=torch.float32)
             for pred_index in range(slot_count):
-                for target_index in range(slot_count):
-                    cost[pred_index, target_index] = (
-                        torch.nn.functional.binary_cross_entropy(
-                            pred_prob["slot_attack"][batch_index, pred_index],
-                            target_cpu["slot_attack"][batch_index, target_index],
-                        )
-                        + torch.nn.functional.binary_cross_entropy(
-                            pred_prob["slot_held"][batch_index, pred_index],
-                            target_cpu["slot_held"][batch_index, target_index],
-                        )
-                        + torch.nn.functional.binary_cross_entropy(
-                            pred_prob["slot_release"][batch_index, pred_index],
-                            target_cpu["slot_release"][batch_index, target_index],
-                        )
+                for column, target_index in enumerate(active_targets):
+                    labels = target_phase[batch_index, target_index]
+                    probs = pred_phase_prob[batch_index, pred_index]
+                    frame_indices = torch.arange(labels.numel())
+                    phase_cost = -torch.log(probs[labels, frame_indices].clamp_min(1e-6))
+                    phase_cost = (phase_cost * weights[labels]).mean()
+                    pred_active = 1.0 - probs[SLOT_PHASE_OFF]
+                    true_active = (labels != SLOT_PHASE_OFF).float()
+                    dice = 1.0 - (2.0 * (pred_active * true_active).sum() + 1e-6) / (
+                        pred_active.sum() + true_active.sum() + 1e-6
                     )
-            pred_indices, target_indices = linear_sum_assignment(cost.numpy())
-            rows.append(list(zip(pred_indices.tolist(), target_indices.tolist(), strict=True)))
+                    cost[pred_index, column] = phase_cost + 0.2 * dice
+            pred_indices, target_columns = linear_sum_assignment(cost.numpy())
+            rows.append(
+                [
+                    (int(pred_index), int(active_targets[target_column]))
+                    for pred_index, target_column in zip(
+                        pred_indices.tolist(), target_columns.tolist(), strict=True
+                    )
+                ]
+            )
     return rows
 
 
@@ -518,14 +592,27 @@ def train_model(
     learning_rate: float = 2e-4,
     target: TrainingTarget = "source_types_v1",
     max_tracks: int = 16,
+    crop_seconds: float = TRAIN_CROP_SECONDS,
 ) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_dataset = CometTimingDataset(
-        data_dir, "train", training=True, limit=limit, target=target, max_tracks=max_tracks
+        data_dir,
+        "train",
+        training=True,
+        limit=limit,
+        crop_seconds=crop_seconds,
+        target=target,
+        max_tracks=max_tracks,
     )
     val_dataset = CometTimingDataset(
-        data_dir, "val", training=False, limit=limit, target=target, max_tracks=max_tracks
+        data_dir,
+        "val",
+        training=False,
+        limit=limit,
+        crop_seconds=crop_seconds,
+        target=target,
+        max_tracks=max_tracks,
     )
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
@@ -560,6 +647,7 @@ def train_model(
                 "n_fft": N_FFT,
                 "hop_length": HOP_LENGTH,
                 "n_mels": N_MELS,
+                "crop_seconds": crop_seconds,
             },
         }
         torch.save(checkpoint, run_dir / "last.pt")
@@ -606,6 +694,8 @@ def _run_epoch(
         for key, value in metrics.items():
             totals[key] = totals.get(key, 0.0) + value * batch_size
         iterator.set_postfix(loss=metrics["loss"])
+    if count == 0:
+        return {"loss": math.inf}
     return {key: value / max(count, 1) for key, value in totals.items()}
 
 
