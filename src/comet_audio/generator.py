@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,8 @@ import soundfile as sf
 from scipy import signal
 
 from comet_audio.assets import (
+    BROKEN_SURGE_ASSET_ID_PREFIXES,
+    BROKEN_SURGE_ASSET_IDS,
     AssetCatalog,
     AssetEntry,
     choose_sfz_region,
@@ -182,6 +186,7 @@ def generate_batch(
     procedural_fallback: bool = True,
     include_tags: tuple[str, ...] = (),
     exclude_tags: tuple[str, ...] = (),
+    workers: int = 1,
 ) -> list[ClipMetadata]:
     config = config or GeneratorConfig()
     if assets is not None or config.asset_catalog is None:
@@ -203,23 +208,46 @@ def generate_batch(
         )
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = out_dir / "manifest.jsonl"
-    clips: list[ClipMetadata] = []
-
-    with manifest_path.open("w", encoding="utf-8") as manifest:
-        for index in range(count):
-            clip_seed = int(seed + index)
-            clip_id = f"clip_{index:04d}"
-            clip_dir = out_dir / clip_id
-            metadata = generate_clip(
-                clip_dir,
-                clip_seed,
+    workers = max(1, int(workers))
+    if workers == 1 or count == 1:
+        clips = [
+            generate_clip(
+                out_dir / f"clip_{index:04d}",
+                int(seed + index),
                 config,
-                clip_id=clip_id,
+                clip_id=f"clip_{index:04d}",
                 dataset_root=out_dir,
                 write_stems=write_stems,
                 flat_layout=flat_layout,
             )
-            clips.append(metadata)
+            for index in range(count)
+        ]
+    else:
+        clips_by_index: dict[int, ClipMetadata] = {}
+        chunk_size = max(1, count // (workers * 8))
+        ranges = [(start, min(count, start + chunk_size)) for start in range(0, count, chunk_size)]
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(
+                    _generate_batch_range,
+                    out_dir,
+                    start,
+                    stop,
+                    seed,
+                    config,
+                    write_stems,
+                    flat_layout,
+                )
+                for start, stop in ranges
+            ]
+            for future in as_completed(futures):
+                for index, metadata in future.result():
+                    clips_by_index[index] = metadata
+        clips = [clips_by_index[index] for index in range(count)]
+
+    with manifest_path.open("w", encoding="utf-8") as manifest:
+        for index, metadata in enumerate(clips):
+            clip_id = f"clip_{index:04d}"
             manifest_mix_path = metadata.paths["mix"] if flat_layout else f"{clip_id}/mix.wav"
             manifest_metadata_path = (
                 metadata.paths["metadata"] if flat_layout else f"{clip_id}/metadata.json"
@@ -239,6 +267,31 @@ def generate_batch(
 
     if write_visualizer:
         write_visualizer_html(out_dir, clips)
+    return clips
+
+
+def _generate_batch_range(
+    out_dir: Path,
+    start: int,
+    stop: int,
+    seed: int,
+    config: GeneratorConfig,
+    write_stems: bool,
+    flat_layout: bool,
+) -> list[tuple[int, ClipMetadata]]:
+    clips: list[tuple[int, ClipMetadata]] = []
+    for index in range(start, stop):
+        clip_id = f"clip_{index:04d}"
+        metadata = generate_clip(
+            out_dir / clip_id,
+            int(seed + index),
+            config,
+            clip_id=clip_id,
+            dataset_root=out_dir,
+            write_stems=write_stems,
+            flat_layout=flat_layout,
+        )
+        clips.append((index, metadata))
     return clips
 
 
@@ -606,52 +659,71 @@ def _choose_percussion_sources(
 def _choose_surge_patch_sources(
     rng: np.random.Generator, source_count: int, config: GeneratorConfig
 ) -> list[SourceType]:
-    surge_available = _available_surge_source_types(config)
-    percussion_available = _available_percussion_source_types(config)
-    if not surge_available:
+    surge_counts = _available_surge_source_type_counts(config)
+    percussion_counts = _available_percussion_source_type_counts(config)
+    if not surge_counts:
         raise ValueError("surge_patches_v1 requires indexed Surge XT patch assets")
+    if sum(surge_counts.values()) + sum(percussion_counts.values()) < source_count:
+        raise ValueError("Not enough unique assets available for requested source count")
+
     percussion_target = min(max(2, source_count // 4), 4, source_count)
     surge_target = source_count - percussion_target
-    chosen = [str(rng.choice(surge_available)) for _ in range(surge_target)]
+    chosen: list[SourceType] = []
+    for _ in range(surge_target):
+        chosen.append(_choose_from_counts(rng, surge_counts))
     for anchor in ("kick", "snare", "closed_hat"):
         if len(chosen) >= source_count:
             break
-        if anchor in percussion_available:
+        if percussion_counts.get(anchor, 0) > 0:
             chosen.append(anchor)
+            percussion_counts[anchor] -= 1
     while len(chosen) < source_count:
-        pool = percussion_available or surge_available
-        chosen.append(str(rng.choice(pool)))
+        pool = percussion_counts if sum(percussion_counts.values()) > 0 else surge_counts
+        chosen.append(_choose_from_counts(rng, pool))
     rng.shuffle(chosen)
     return list(chosen)
 
 
-def _available_surge_source_types(config: GeneratorConfig) -> list[SourceType]:
+def _choose_from_counts(rng: np.random.Generator, counts: Counter[SourceType]) -> SourceType:
+    available = [source_type for source_type, count in counts.items() if count > 0]
+    if not available:
+        raise ValueError("No available source types remain")
+    chosen = str(rng.choice(available))
+    counts[chosen] -= 1
+    return chosen
+
+
+def _available_surge_source_type_counts(config: GeneratorConfig) -> Counter[SourceType]:
     if config.asset_catalog is None:
-        return []
-    available: list[SourceType] = []
+        return Counter()
+    available: Counter[SourceType] = Counter()
     for entry in config.asset_catalog.entries:
         if entry.renderer != "surge_xt_fxp":
             continue
         if entry.source_type in PERCUSSION_SOURCE_TYPES:
             continue
-        if not _asset_matches_tags(entry, config.include_tags, config.exclude_tags):
+        if not _asset_is_selectable(entry, config):
             continue
-        if entry.source_type not in available:
-            available.append(entry.source_type)
+        available[entry.source_type] += 1
+    return available
+
+
+def _available_surge_source_types(config: GeneratorConfig) -> list[SourceType]:
+    return list(_available_surge_source_type_counts(config))
+
+
+def _available_percussion_source_type_counts(config: GeneratorConfig) -> Counter[SourceType]:
+    if config.procedural_fallback or config.asset_catalog is None:
+        return Counter({source_type: 1_000_000 for source_type in PERCUSSION_SOURCE_TYPES})
+    available: Counter[SourceType] = Counter()
+    for entry in config.asset_catalog.entries:
+        if entry.source_type in PERCUSSION_SOURCE_TYPES and _asset_is_selectable(entry, config):
+            available[entry.source_type] += 1
     return available
 
 
 def _available_percussion_source_types(config: GeneratorConfig) -> list[SourceType]:
-    if config.procedural_fallback or config.asset_catalog is None:
-        return list(PERCUSSION_SOURCE_TYPES)
-    available: list[SourceType] = []
-    for source_type in PERCUSSION_SOURCE_TYPES:
-        if any(
-            _asset_matches_tags(entry, config.include_tags, config.exclude_tags)
-            for entry in config.asset_catalog.candidates(source_type)
-        ):
-            available.append(source_type)
-    return available
+    return list(_available_percussion_source_type_counts(config))
 
 
 def _choose_clip_duration(rng: np.random.Generator, config: GeneratorConfig) -> float:
@@ -822,6 +894,7 @@ def _choose_asset_for_source(
             entry
             for entry in catalog.candidates(source_type, renderer)
             if _asset_matches_tags(entry, include_tags, exclude_tags)
+            and not _asset_is_broken(entry)
             and _asset_unique_key(entry) not in exclude_asset_keys
         ]
         if candidates:
@@ -842,6 +915,18 @@ def _asset_unique_key(entry: AssetEntry) -> str:
     if entry.preset_path:
         return f"preset:{Path(entry.preset_path).as_posix().lower()}"
     return f"asset:{entry.asset_id}"
+
+
+def _asset_is_selectable(entry: AssetEntry, config: GeneratorConfig) -> bool:
+    return _asset_matches_tags(
+        entry, config.include_tags, config.exclude_tags
+    ) and not _asset_is_broken(entry)
+
+
+def _asset_is_broken(entry: AssetEntry) -> bool:
+    return entry.asset_id in BROKEN_SURGE_ASSET_IDS or entry.asset_id.startswith(
+        BROKEN_SURGE_ASSET_ID_PREFIXES
+    )
 
 
 def _asset_matches_tags(

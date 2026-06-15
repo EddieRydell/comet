@@ -62,7 +62,7 @@ def test_dataset_loads_manifest_audio_and_metadata(tmp_path: Path) -> None:
 
     items = load_manifest(tmp_path / "training")
     metadata = load_metadata(items[0].metadata_path)
-    dataset = CometTimingDataset(tmp_path / "training", "train", training=False)
+    dataset = CometTimingDataset(tmp_path / "training", "train", training=False, crop_seconds=1.0)
     sample = dataset[0]
 
     assert len(items) == 2
@@ -81,6 +81,17 @@ def test_split_logic_returns_exact_10k_manifest_order_counts() -> None:
     assert split_manifest(items, "train")[0].entry.clip_id == "clip_0000"
     assert split_manifest(items, "val")[0].entry.clip_id == "clip_8000"
     assert split_manifest(items, "test")[0].entry.clip_id == "clip_9000"
+
+
+def test_split_logic_uses_full_large_manifest() -> None:
+    items = _dummy_items(100_000)
+
+    assert len(split_manifest(items, "train")) == 80_000
+    assert len(split_manifest(items, "val")) == 10_000
+    assert len(split_manifest(items, "test")) == 10_000
+    assert split_manifest(items, "train")[-1].entry.clip_id == "clip_79999"
+    assert split_manifest(items, "val")[0].entry.clip_id == "clip_80000"
+    assert split_manifest(items, "test")[0].entry.clip_id == "clip_90000"
 
 
 def test_target_builder_aligns_timestamps_to_frames(tmp_path: Path) -> None:

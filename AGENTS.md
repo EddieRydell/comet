@@ -4,7 +4,6 @@ These instructions apply to this repository.
 
 ## Workflow
 
-- Do not use `git` or commands associated with it unless the user specifically requests it.
 - Do not jump to editing when the conversation is about diagnosing an issue, root cause analysis, architecture, or design decisions. Investigate and discuss first.
 - When planning for user approval, list the files expected to be affected.
 - Ask relevant questions when requirements are ambiguous or when a choice changes the generator, metadata schema, training targets, or dataset layout.

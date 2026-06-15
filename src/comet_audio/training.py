@@ -45,6 +45,28 @@ class DatasetItem:
     metadata_path: Path
 
 
+@dataclass(frozen=True)
+class TrainingSourceMetadata:
+    source_id: str
+
+
+@dataclass(frozen=True)
+class TrainingEventMetadata:
+    source_id: str
+    onset_seconds: float
+    offset_seconds: float
+    attack_seconds: float
+    release_seconds: float
+
+
+@dataclass(frozen=True)
+class TrainingClipMetadata:
+    sample_rate: int
+    duration_seconds: float
+    sources: tuple[TrainingSourceMetadata, ...]
+    events: tuple[TrainingEventMetadata, ...]
+
+
 def load_manifest(data_dir: Path) -> list[DatasetItem]:
     manifest_path = data_dir / "manifest.jsonl"
     if not manifest_path.exists():
@@ -65,11 +87,6 @@ def load_manifest(data_dir: Path) -> list[DatasetItem]:
 
 
 def split_manifest(items: list[DatasetItem], split: SplitName) -> list[DatasetItem]:
-    if len(items) >= 10_000:
-        ranges = {"train": (0, 8000), "val": (8000, 9000), "test": (9000, 10_000)}
-        start, end = ranges[split]
-        return items[start:end]
-
     train_end = int(len(items) * 0.8)
     val_end = train_end + int(len(items) * 0.1)
     ranges = {"train": (0, train_end), "val": (train_end, val_end), "test": (val_end, len(items))}
@@ -81,6 +98,27 @@ def load_metadata(path: Path) -> ClipMetadata:
     return ClipMetadata.model_validate_json(path.read_text(encoding="utf-8"))
 
 
+def load_anonymous_training_metadata(path: Path) -> TrainingClipMetadata:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return TrainingClipMetadata(
+        sample_rate=int(data["sample_rate"]),
+        duration_seconds=float(data["duration_seconds"]),
+        sources=tuple(
+            TrainingSourceMetadata(source_id=str(source["source_id"])) for source in data["sources"]
+        ),
+        events=tuple(
+            TrainingEventMetadata(
+                source_id=str(event["source_id"]),
+                onset_seconds=float(event["onset_seconds"]),
+                offset_seconds=float(event["offset_seconds"]),
+                attack_seconds=float(event["attack_seconds"]),
+                release_seconds=float(event["release_seconds"]),
+            )
+            for event in data["events"]
+        ),
+    )
+
+
 def load_mono_audio(path: Path, sample_rate: int = SAMPLE_RATE) -> Tensor:
     audio, actual_sample_rate = sf.read(path, dtype="float32", always_2d=False)
     if actual_sample_rate != sample_rate:
@@ -88,6 +126,31 @@ def load_mono_audio(path: Path, sample_rate: int = SAMPLE_RATE) -> Tensor:
     if audio.ndim == 2:
         audio = audio.mean(axis=1)
     return torch.from_numpy(np.asarray(audio, dtype=np.float32))
+
+
+def load_mono_audio_window(
+    path: Path,
+    start_seconds: float,
+    duration_seconds: float,
+    sample_rate: int = SAMPLE_RATE,
+) -> Tensor:
+    start = max(0, int(round(start_seconds * sample_rate)))
+    length = int(round(duration_seconds * sample_rate))
+    audio, actual_sample_rate = sf.read(
+        path,
+        start=start,
+        frames=length,
+        dtype="float32",
+        always_2d=False,
+    )
+    if actual_sample_rate != sample_rate:
+        raise ValueError(f"{path} has sample rate {actual_sample_rate}, expected {sample_rate}")
+    if audio.ndim == 2:
+        audio = audio.mean(axis=1)
+    waveform = torch.from_numpy(np.asarray(audio, dtype=np.float32))
+    if waveform.numel() < length:
+        waveform = torch.nn.functional.pad(waveform, (0, length - waveform.numel()))
+    return waveform
 
 
 def crop_or_pad(waveform: Tensor, start_seconds: float, duration_seconds: float) -> Tensor:
@@ -189,21 +252,26 @@ class CometTimingDataset(Dataset[dict[str, Tensor]]):
         self.crop_seconds = crop_seconds
         self.target = target
         self.max_tracks = max_tracks
+        self._metadata_cache: dict[Path, ClipMetadata | TrainingClipMetadata] = {}
 
     def __len__(self) -> int:
         return len(self.items)
 
     def __getitem__(self, index: int) -> dict[str, Tensor]:
         item = self.items[index]
-        metadata = load_metadata(item.metadata_path)
-        waveform = load_mono_audio(item.mix_path, sample_rate=metadata.sample_rate)
+        metadata = self._load_metadata(item.metadata_path)
         duration = float(metadata.duration_seconds)
-        crop_duration = self.crop_seconds if self.training else duration
+        crop_duration = self.crop_seconds
         max_start = max(0.0, duration - crop_duration)
         crop_start = random.uniform(0.0, max_start) if self.training and max_start > 0 else 0.0
-        waveform = crop_or_pad(waveform, crop_start, crop_duration)
+        waveform = load_mono_audio_window(
+            item.mix_path,
+            crop_start,
+            crop_duration,
+            sample_rate=metadata.sample_rate,
+        )
         if self.target == "anonymous_slots_v1":
-            targets = build_anonymous_slot_targets(
+            targets = build_anonymous_slot_phase_targets(
                 metadata,
                 num_frames=frame_count(waveform.numel()),
                 max_tracks=self.max_tracks,
@@ -219,9 +287,19 @@ class CometTimingDataset(Dataset[dict[str, Tensor]]):
             )
         return {"waveform": waveform, **targets}
 
+    def _load_metadata(self, path: Path) -> ClipMetadata | TrainingClipMetadata:
+        metadata = self._metadata_cache.get(path)
+        if metadata is None:
+            if self.target == "anonymous_slots_v1":
+                metadata = load_anonymous_training_metadata(path)
+            else:
+                metadata = load_metadata(path)
+            self._metadata_cache[path] = metadata
+        return metadata
+
 
 def build_anonymous_slot_targets(
-    metadata: ClipMetadata,
+    metadata: ClipMetadata | TrainingClipMetadata,
     num_frames: int,
     max_tracks: int = 16,
     crop_start_seconds: float = 0.0,
@@ -229,9 +307,6 @@ def build_anonymous_slot_targets(
     hop_length: int = HOP_LENGTH,
     mark_sigma_seconds: float = 0.006,
 ) -> dict[str, Tensor]:
-    frame_times = crop_start_seconds + torch.arange(num_frames, dtype=torch.float32) * (
-        hop_length / sample_rate
-    )
     slot_attack = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
     slot_held = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
     slot_release = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
@@ -249,27 +324,30 @@ def build_anonymous_slot_targets(
         offset = float(event.offset_seconds)
         attack_end = min(offset, onset + float(event.attack_seconds))
         release_start = max(attack_end, offset - float(event.release_seconds))
-        slot_attack[slot_index] = torch.maximum(
-            slot_attack[slot_index],
-            ((frame_times >= onset) & (frame_times < attack_end)).float(),
+        held_start, held_stop = _frame_slice(
+            attack_end, release_start, crop_start_seconds, num_frames, sample_rate, hop_length
         )
-        slot_held[slot_index] = torch.maximum(
-            slot_held[slot_index],
-            ((frame_times >= attack_end) & (frame_times < release_start)).float(),
+        release_start_frame, release_stop = _frame_slice(
+            release_start,
+            offset,
+            crop_start_seconds,
+            num_frames,
+            sample_rate,
+            hop_length,
+            include_stop=True,
         )
-        slot_release[slot_index] = torch.maximum(
-            slot_release[slot_index],
-            ((frame_times >= release_start) & (frame_times <= offset)).float(),
+        attack_start, attack_stop = _frame_slice(
+            onset, attack_end, crop_start_seconds, num_frames, sample_rate, hop_length
         )
-        slot_phase[slot_index][(frame_times >= attack_end) & (frame_times < release_start)] = (
-            SLOT_PHASE_HELD
-        )
-        slot_phase[slot_index][(frame_times >= release_start) & (frame_times <= offset)] = (
-            SLOT_PHASE_RELEASE
-        )
-        slot_phase[slot_index][(frame_times >= onset) & (frame_times < attack_end)] = (
-            SLOT_PHASE_ATTACK
-        )
+        if held_start < held_stop:
+            slot_held[slot_index, held_start:held_stop] = 1.0
+            slot_phase[slot_index, held_start:held_stop] = SLOT_PHASE_HELD
+        if release_start_frame < release_stop:
+            slot_release[slot_index, release_start_frame:release_stop] = 1.0
+            slot_phase[slot_index, release_start_frame:release_stop] = SLOT_PHASE_RELEASE
+        if attack_start < attack_stop:
+            slot_attack[slot_index, attack_start:attack_stop] = 1.0
+            slot_phase[slot_index, attack_start:attack_stop] = SLOT_PHASE_ATTACK
     slot_activity = (slot_attack + slot_held + slot_release).amax(dim=-1).clamp(0.0, 1.0)
     return {
         "slot_attack": slot_attack.clamp(0.0, 1.0),
@@ -279,6 +357,70 @@ def build_anonymous_slot_targets(
         "slot_mask": slot_mask,
         "slot_activity": slot_activity,
     }
+
+
+def build_anonymous_slot_phase_targets(
+    metadata: ClipMetadata | TrainingClipMetadata,
+    num_frames: int,
+    max_tracks: int = 16,
+    crop_start_seconds: float = 0.0,
+    sample_rate: int = SAMPLE_RATE,
+    hop_length: int = HOP_LENGTH,
+) -> dict[str, Tensor]:
+    slot_phase = torch.zeros(max_tracks, num_frames, dtype=torch.long)
+    sources = metadata.sources[:max_tracks]
+    source_to_slot = {source.source_id: index for index, source in enumerate(sources)}
+    for event in metadata.events:
+        if event.source_id not in source_to_slot:
+            continue
+        slot_index = source_to_slot[event.source_id]
+        onset = float(event.onset_seconds)
+        offset = float(event.offset_seconds)
+        attack_end = min(offset, onset + float(event.attack_seconds))
+        release_start = max(attack_end, offset - float(event.release_seconds))
+        held_start, held_stop = _frame_slice(
+            attack_end, release_start, crop_start_seconds, num_frames, sample_rate, hop_length
+        )
+        release_start_frame, release_stop = _frame_slice(
+            release_start,
+            offset,
+            crop_start_seconds,
+            num_frames,
+            sample_rate,
+            hop_length,
+            include_stop=True,
+        )
+        attack_start, attack_stop = _frame_slice(
+            onset, attack_end, crop_start_seconds, num_frames, sample_rate, hop_length
+        )
+        if held_start < held_stop:
+            slot_phase[slot_index, held_start:held_stop] = SLOT_PHASE_HELD
+        if release_start_frame < release_stop:
+            slot_phase[slot_index, release_start_frame:release_stop] = SLOT_PHASE_RELEASE
+        if attack_start < attack_stop:
+            slot_phase[slot_index, attack_start:attack_stop] = SLOT_PHASE_ATTACK
+    return {
+        "slot_phase": slot_phase,
+        "slot_activity": (slot_phase != SLOT_PHASE_OFF).any(dim=-1).float(),
+    }
+
+
+def _frame_slice(
+    start_seconds: float,
+    stop_seconds: float,
+    crop_start_seconds: float,
+    num_frames: int,
+    sample_rate: int,
+    hop_length: int,
+    include_stop: bool = False,
+) -> tuple[int, int]:
+    frame_seconds = hop_length / sample_rate
+    start = math.ceil((start_seconds - crop_start_seconds) / frame_seconds)
+    if include_stop:
+        stop = math.floor((stop_seconds - crop_start_seconds) / frame_seconds) + 1
+    else:
+        stop = math.ceil((stop_seconds - crop_start_seconds) / frame_seconds)
+    return max(0, start), min(num_frames, max(0, stop))
 
 
 class ResidualTCNBlock(nn.Module):
@@ -435,7 +577,8 @@ def focal_cross_entropy(
 def compute_loss(
     predictions: dict[str, Tensor],
     batch: dict[str, Tensor],
-) -> tuple[Tensor, dict[str, float]]:
+    detach_metrics: bool = True,
+) -> tuple[Tensor, dict[str, float] | dict[str, Tensor]]:
     predictions, targets = _align_time(predictions, batch)
     onset_loss = focal_bce_with_logits(predictions["onset"], targets["onset"])
     envelope_loss = (
@@ -454,19 +597,23 @@ def compute_loss(
     else:
         offset_loss = predictions["onset_offset"].sum() * 0.0
     total = onset_loss + 0.5 * envelope_loss + 0.5 * offset_loss + 0.15 * source_loss
-    return total, {
-        "loss": float(total.detach().cpu()),
-        "onset_loss": float(onset_loss.detach().cpu()),
-        "envelope_loss": float(envelope_loss.detach().cpu()),
-        "offset_loss": float(offset_loss.detach().cpu()),
-        "source_loss": float(source_loss.detach().cpu()),
+    metrics = {
+        "loss": total.detach(),
+        "onset_loss": onset_loss.detach(),
+        "envelope_loss": envelope_loss.detach(),
+        "offset_loss": offset_loss.detach(),
+        "source_loss": source_loss.detach(),
     }
+    if detach_metrics:
+        return total, {key: float(value.cpu()) for key, value in metrics.items()}
+    return total, metrics
 
 
 def compute_anonymous_slot_loss(
     predictions: dict[str, Tensor],
     batch: dict[str, Tensor],
-) -> tuple[Tensor, dict[str, float]]:
+    detach_metrics: bool = True,
+) -> tuple[Tensor, dict[str, float] | dict[str, Tensor]]:
     time = min(predictions["slot_phase"].shape[-1], batch["slot_phase"].shape[-1])
     pred = {key: value[..., :time] for key, value in predictions.items()}
     target = {
@@ -475,67 +622,69 @@ def compute_anonymous_slot_loss(
         if key in {"slot_attack", "slot_held", "slot_release", "slot_phase", "slot_activity"}
     }
     assignments = _slot_assignments(pred, target)
-    phase_losses: list[Tensor] = []
-    unused_off_losses: list[Tensor] = []
-    activity_losses: list[Tensor] = []
     weights = SLOT_PHASE_WEIGHTS.to(pred["slot_phase"].device)
+    matched_batch_indices: list[int] = []
+    matched_pred_indices: list[int] = []
+    matched_target_indices: list[int] = []
+    unmatched_batch_indices: list[int] = []
+    unmatched_pred_indices: list[int] = []
+    activity_targets = torch.zeros_like(pred["slot_activity"])
     for batch_index, assignment in enumerate(assignments):
-        matched_pred_indices = [pair[0] for pair in assignment]
-        matched_target_indices = [pair[1] for pair in assignment]
-        if matched_pred_indices:
-            pred_indices = torch.as_tensor(matched_pred_indices, device=pred["slot_phase"].device)
-            target_indices = torch.as_tensor(
-                matched_target_indices, device=pred["slot_phase"].device
-            )
-            phase_losses.append(
-                focal_cross_entropy(
-                    pred["slot_phase"][batch_index, pred_indices],
-                    target["slot_phase"][batch_index, target_indices].long(),
-                    weights=weights,
-                )
-            )
-        unmatched_pred_indices = [
+        batch_matched_pred_indices = [pair[0] for pair in assignment]
+        for pred_index, target_index in assignment:
+            matched_batch_indices.append(batch_index)
+            matched_pred_indices.append(pred_index)
+            matched_target_indices.append(target_index)
+            activity_targets[batch_index, pred_index] = 1.0
+        unmatched = [
             index
             for index in range(pred["slot_phase"].shape[1])
-            if index not in set(matched_pred_indices)
+            if index not in set(batch_matched_pred_indices)
         ]
-        if unmatched_pred_indices:
-            pred_indices = torch.as_tensor(unmatched_pred_indices, device=pred["slot_phase"].device)
-            off_targets = torch.zeros(
-                len(unmatched_pred_indices),
-                time,
-                dtype=torch.long,
-                device=pred["slot_phase"].device,
-            )
-            unused_off_losses.append(
-                focal_cross_entropy(
-                    pred["slot_phase"][batch_index, pred_indices],
-                    off_targets,
-                    weights=weights,
-                )
-            )
-        activity_targets = torch.zeros_like(pred["slot_activity"][batch_index])
-        if matched_pred_indices:
-            activity_targets[
-                torch.as_tensor(matched_pred_indices, device=activity_targets.device)
-            ] = 1.0
-        activity_losses.append(
-            torch.nn.functional.binary_cross_entropy_with_logits(
-                pred["slot_activity"][batch_index],
-                activity_targets,
-            )
-        )
+        unmatched_batch_indices.extend([batch_index] * len(unmatched))
+        unmatched_pred_indices.extend(unmatched)
     zero = pred["slot_phase"].sum() * 0.0
-    phase_loss = torch.stack(phase_losses).mean() if phase_losses else zero
-    unused_off_loss = torch.stack(unused_off_losses).mean() if unused_off_losses else zero
-    activity_loss = torch.stack(activity_losses).mean() if activity_losses else zero
+    if matched_batch_indices:
+        batch_indices = torch.as_tensor(matched_batch_indices, device=pred["slot_phase"].device)
+        pred_indices = torch.as_tensor(matched_pred_indices, device=pred["slot_phase"].device)
+        target_indices = torch.as_tensor(matched_target_indices, device=pred["slot_phase"].device)
+        phase_loss = focal_cross_entropy(
+            pred["slot_phase"][batch_indices, pred_indices],
+            target["slot_phase"][batch_indices, target_indices].long(),
+            weights=weights,
+        )
+    else:
+        phase_loss = zero
+    if unmatched_batch_indices:
+        batch_indices = torch.as_tensor(unmatched_batch_indices, device=pred["slot_phase"].device)
+        pred_indices = torch.as_tensor(unmatched_pred_indices, device=pred["slot_phase"].device)
+        off_targets = torch.zeros(
+            len(unmatched_pred_indices),
+            time,
+            dtype=torch.long,
+            device=pred["slot_phase"].device,
+        )
+        unused_off_loss = focal_cross_entropy(
+            pred["slot_phase"][batch_indices, pred_indices],
+            off_targets,
+            weights=weights,
+        )
+    else:
+        unused_off_loss = zero
+    activity_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+        pred["slot_activity"],
+        activity_targets,
+    )
     total = phase_loss + 0.5 * unused_off_loss + 0.2 * activity_loss
-    return total, {
-        "loss": float(total.detach().cpu()),
-        "slot_phase_loss": float(phase_loss.detach().cpu()),
-        "slot_unused_off_loss": float(unused_off_loss.detach().cpu()),
-        "slot_activity_loss": float(activity_loss.detach().cpu()),
+    metrics = {
+        "loss": total.detach(),
+        "slot_phase_loss": phase_loss.detach(),
+        "slot_unused_off_loss": unused_off_loss.detach(),
+        "slot_activity_loss": activity_loss.detach(),
     }
+    if detach_metrics:
+        return total, {key: float(value.cpu()) for key, value in metrics.items()}
+    return total, metrics
 
 
 def _slot_assignments(
@@ -557,20 +706,26 @@ def _slot_assignments(
             if not active_targets:
                 rows.append([])
                 continue
-            cost = torch.zeros(slot_count, len(active_targets), dtype=torch.float32)
-            for pred_index in range(slot_count):
-                for column, target_index in enumerate(active_targets):
-                    labels = target_phase[batch_index, target_index]
-                    probs = pred_phase_prob[batch_index, pred_index]
-                    frame_indices = torch.arange(labels.numel())
-                    phase_cost = -torch.log(probs[labels, frame_indices].clamp_min(1e-6))
-                    phase_cost = (phase_cost * weights[labels]).mean()
-                    pred_active = 1.0 - probs[SLOT_PHASE_OFF]
-                    true_active = (labels != SLOT_PHASE_OFF).float()
-                    dice = 1.0 - (2.0 * (pred_active * true_active).sum() + 1e-6) / (
-                        pred_active.sum() + true_active.sum() + 1e-6
-                    )
-                    cost[pred_index, column] = phase_cost + 0.2 * dice
+            labels = target_phase[batch_index, active_targets]
+            probs = pred_phase_prob[batch_index]
+            gathered = (
+                probs[:, None]
+                .expand(-1, len(active_targets), -1, -1)
+                .gather(
+                    dim=2,
+                    index=labels[None, :, None, :].expand(slot_count, -1, 1, -1),
+                )
+            )
+            phase_cost = -torch.log(gathered.squeeze(2).clamp_min(1e-6))
+            phase_cost = (phase_cost * weights[labels][None]).mean(dim=-1)
+
+            pred_active = 1.0 - probs[:, SLOT_PHASE_OFF]
+            true_active = (labels != SLOT_PHASE_OFF).float()
+            intersection = pred_active @ true_active.transpose(0, 1)
+            dice = 1.0 - (2.0 * intersection + 1e-6) / (
+                pred_active.sum(dim=-1, keepdim=True) + true_active.sum(dim=-1)[None] + 1e-6
+            )
+            cost = phase_cost + 0.2 * dice
             pred_indices, target_columns = linear_sum_assignment(cost.numpy())
             rows.append(
                 [
@@ -588,6 +743,7 @@ def train_model(
     run_dir: Path,
     epochs: int = DEFAULT_EPOCHS,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    loader_workers: int = 0,
     limit: int | None = None,
     learning_rate: float = 2e-4,
     target: TrainingTarget = "source_types_v1",
@@ -614,8 +770,23 @@ def train_model(
         target=target,
         max_tracks=max_tracks,
     )
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+    loader_kwargs = {
+        "num_workers": loader_workers,
+        "pin_memory": device.type == "cuda",
+        "persistent_workers": loader_workers > 0,
+    }
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        **loader_kwargs,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        **loader_kwargs,
+    )
     model: nn.Module
     if target == "anonymous_slots_v1":
         model = CNNTCNSlotModel(max_tracks=max_tracks).to(device)
@@ -666,11 +837,11 @@ def _run_epoch(
     target: TrainingTarget = "source_types_v1",
 ) -> dict[str, float]:
     model.train(training)
-    totals: dict[str, float] = {}
+    totals: dict[str, Tensor] = {}
     count = 0
-    iterator = tqdm(loader, leave=False, desc="train" if training else "val")
+    iterator = tqdm(loader, leave=False, desc="train" if training else "val", mininterval=5.0)
     for batch in iterator:
-        batch = {key: value.to(device) for key, value in batch.items()}
+        batch = {key: value.to(device, non_blocking=True) for key, value in batch.items()}
         with (
             torch.set_grad_enabled(training),
             torch.amp.autocast(
@@ -681,9 +852,11 @@ def _run_epoch(
         ):
             predictions = model(batch["waveform"])
             if target == "anonymous_slots_v1":
-                loss, metrics = compute_anonymous_slot_loss(predictions, batch)
+                loss, metrics = compute_anonymous_slot_loss(
+                    predictions, batch, detach_metrics=False
+                )
             else:
-                loss, metrics = compute_loss(predictions, batch)
+                loss, metrics = compute_loss(predictions, batch, detach_metrics=False)
         if training:
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
@@ -692,11 +865,12 @@ def _run_epoch(
         batch_size = int(batch["waveform"].shape[0])
         count += batch_size
         for key, value in metrics.items():
-            totals[key] = totals.get(key, 0.0) + value * batch_size
-        iterator.set_postfix(loss=metrics["loss"])
+            totals[key] = totals.get(key, value.new_zeros(())) + value * batch_size
+        if count % (batch_size * 100) == 0:
+            iterator.set_postfix(loss=float(metrics["loss"].detach().cpu()))
     if count == 0:
         return {"loss": math.inf}
-    return {key: value / max(count, 1) for key, value in totals.items()}
+    return {key: float((value / max(count, 1)).cpu()) for key, value in totals.items()}
 
 
 def load_trained_model(run_dir: Path, device: torch.device) -> CNNTCNTimingModel:

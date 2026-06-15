@@ -20,7 +20,7 @@ from comet_audio.dawdreamer_renderer import (
     import_surge_preset,
 )
 from comet_audio.generator import DEFAULT_TIME_SIGNATURES, GeneratorConfig, generate_batch
-from comet_audio.inference import predict_song
+from comet_audio.inference import predict_anonymous_slots, predict_song
 from comet_audio.training import DEFAULT_BATCH_SIZE, DEFAULT_EPOCHS, evaluate_model, train_model
 
 app = typer.Typer(help="Generate synthetic EDM clips and labels.")
@@ -78,14 +78,6 @@ def generate(
         str,
         typer.Option(help="Renderer profile: hybrid_v1, procedural_only, or plugin_v1."),
     ] = "hybrid_v1",
-    include_tag: Annotated[
-        list[str] | None,
-        typer.Option("--include-tag", help="Require catalog asset tag. Repeatable."),
-    ] = None,
-    exclude_tag: Annotated[
-        list[str] | None,
-        typer.Option("--exclude-tag", help="Exclude catalog asset tag. Repeatable."),
-    ] = None,
     procedural_fallback: Annotated[
         bool,
         typer.Option(
@@ -97,6 +89,10 @@ def generate(
         str,
         typer.Option(help="Composition profile: edm_v1, percussion_v1, or surge_patches_v1."),
     ] = "edm_v1",
+    workers: Annotated[
+        int,
+        typer.Option(min=1, help="Parallel generator worker processes."),
+    ] = 1,
 ) -> None:
     """Generate a batch of labeled procedural EDM clips."""
     if composition_profile not in {"edm_v1", "percussion_v1", "surge_patches_v1"}:
@@ -125,8 +121,7 @@ def generate(
         assets=assets,
         renderer_profile=renderer_profile,
         procedural_fallback=procedural_fallback,
-        include_tags=tuple(include_tag or ()),
-        exclude_tags=tuple(exclude_tag or ()),
+        workers=workers,
     )
     typer.echo(f"Generated {len(clips)} clips in {out}")
 
@@ -607,6 +602,10 @@ def train(
     run: Annotated[Path, typer.Option(help="Run directory.")] = Path("runs/cnn_tcn_v1"),
     epochs: Annotated[int, typer.Option(min=1, help="Training epochs.")] = DEFAULT_EPOCHS,
     batch_size: Annotated[int, typer.Option(min=1, help="Batch size.")] = DEFAULT_BATCH_SIZE,
+    loader_workers: Annotated[
+        int,
+        typer.Option(min=0, help="DataLoader worker processes for train and validation."),
+    ] = 0,
     limit: Annotated[
         int | None,
         typer.Option(min=1, help="Optional per-split item limit for smoke tests."),
@@ -633,6 +632,7 @@ def train(
         run_dir=run,
         epochs=epochs,
         batch_size=batch_size,
+        loader_workers=loader_workers,
         limit=limit,
         learning_rate=learning_rate,
         target=target,  # type: ignore[arg-type]
@@ -713,6 +713,36 @@ def predict_song_command(
         nms_seconds=nms_seconds,
         source_threshold=source_threshold,
         max_waveform_points=max_waveform_points,
+    )
+    typer.echo(f"Wrote {json_path}")
+    typer.echo(f"Wrote {html_path}")
+
+
+@app.command("predict-slots")
+def predict_slots_command(
+    audio: Annotated[Path, typer.Option(help="Song/audio file to analyze.")] = ...,
+    run: Annotated[Path, typer.Option(help="Run directory containing best.pt or last.pt.")] = Path(
+        "runs/surge_slots_v1"
+    ),
+    out: Annotated[Path, typer.Option(help="Output directory for predictions and HTML.")] = Path(
+        "data/generated/slot_predictions"
+    ),
+    max_waveform_points: Annotated[
+        int,
+        typer.Option(min=100, help="Maximum downsampled waveform peak points embedded in JSON."),
+    ] = 2000,
+    min_segment_seconds: Annotated[
+        float,
+        typer.Option(min=0.0, help="Drop predicted phase segments shorter than this duration."),
+    ] = 0.02,
+) -> None:
+    """Run an anonymous slot model and write a generated-data-style lane viewer."""
+    json_path, html_path = predict_anonymous_slots(
+        audio_path=audio,
+        run_dir=run,
+        out_dir=out,
+        max_waveform_points=max_waveform_points,
+        min_segment_seconds=min_segment_seconds,
     )
     typer.echo(f"Wrote {json_path}")
     typer.echo(f"Wrote {html_path}")

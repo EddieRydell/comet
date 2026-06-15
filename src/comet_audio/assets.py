@@ -193,6 +193,18 @@ SURGE_EXCLUDED_CATEGORIES = {
     "tutorials",
     "vocoder",
 }
+BROKEN_SURGE_ASSET_IDS = {
+    # Access-violates inside DawDreamer/Surge during preset load/render.
+    "surge_xt_thirdparty_jacky_ligon_keys_bell_keys_1_1_3_5",
+    "surge_xt_thirdparty_jacky_ligon_keys_bell_keys_2_1_5_6",
+    "surge_xt_thirdparty_jacky_ligon_keys_bell_keys_3_1_3_5",
+}
+BROKEN_SURGE_ASSET_ID_PREFIXES = (
+    # Multiple presets from this provider crash the Surge VST2 through DawDreamer.
+    "surge_xt_thirdparty_jacky_ligon_",
+    "surge_xt_thirdparty_john_valentine_",
+    "surge_xt_thirdparty_linnstrument_mpe_",
+)
 SURGE_SOURCE_TYPE_BY_CATEGORY: tuple[tuple[SourceType, tuple[str, ...]], ...] = (
     ("synth_bass", ("bass", "basses", "sub")),
     ("synth_lead", ("lead", "leads")),
@@ -332,6 +344,10 @@ def index_surge_patches(
             asset_slug = _slugify_asset_component(
                 f"{asset_prefix}_{library_kind}_{'_'.join(relative.with_suffix('').parts)}"
             )
+            if asset_slug in BROKEN_SURGE_ASSET_IDS or asset_slug.startswith(
+                BROKEN_SURGE_ASSET_ID_PREFIXES
+            ):
+                continue
             tags = [
                 "surge",
                 "synth_patch",
