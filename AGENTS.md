@@ -42,6 +42,16 @@ These instructions apply to this repository.
 - Do not use `.env` files or environment variables for project configuration in this codebase.
 - Do not commit large sample libraries, generated datasets, visualizer batches, checkpoints, or run artifacts unless the user specifically asks.
 
+## Upstairs Training Machine
+
+- The SSH alias is `upstairs`. It lands in a Windows shell on host `Upstairs_TV_PC`, not a Unix shell. Prefer simple `cmd` commands over POSIX shell syntax when using `ssh upstairs`.
+- There are multiple clones on that machine. The training/data clone used for long GPU runs is `C:\dev\comet`. Another clone may exist under the SSH user's home directory and may not have the large datasets.
+- The 100k generated Surge dataset is at `C:\dev\comet\data\generated\surge_train_100k`. Its shards are under `C:\dev\comet\data\generated\surge_train_100k_shards`.
+- Existing helper scripts live in `C:\dev`, including training launch scripts such as `comet_train_100k_b16w1.cmd`. Confirm script contents before reuse because run directories and objectives may differ.
+- For overnight training, prefer launching a `.cmd` script with Windows Task Scheduler or another detached Windows mechanism so the job survives SSH session exit. Disable any future scheduled trigger after starting a one-off task to avoid duplicate launches.
+- Use `batch-size 16` and `loader-workers 1` for the current upstairs 100k slot-training setup unless the user asks to benchmark different values.
+- Keep inference/viewer generation local when possible: copy `best.pt`, `metrics.jsonl`, and a few selected clips from upstairs rather than running extra inference on the training machine during an active training run.
+
 ## Assets And Generation
 
 - Treat the asset catalog as the source of truth for repo-local sample libraries.

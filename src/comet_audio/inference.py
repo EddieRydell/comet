@@ -15,10 +15,8 @@ from scipy import signal
 from comet_audio.training import (
     HOP_LENGTH,
     SAMPLE_RATE,
-    SLOT_PHASE_ATTACK,
-    SLOT_PHASE_HELD,
-    SLOT_PHASE_RELEASE,
-    CNNTCNSlotModel,
+    SLOT_BOUNDARY_NAMES,
+    SlotAttentionEventModel,
     decode_onsets,
     load_trained_model,
     load_trained_source_types,
@@ -34,7 +32,7 @@ def predict_song(
     nms_seconds: float = 0.025,
     source_threshold: float = 0.35,
     max_waveform_points: int = 2000,
-) -> tuple[Path, Path]:
+) -> Path:
     audio_path = audio_path.resolve()
     run_dir = run_dir.resolve()
     out_dir = out_dir.resolve()
@@ -94,9 +92,7 @@ def predict_song(
         json.dumps(payload, allow_nan=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    html_path = out_dir / "visualizer.html"
-    html_path.write_text(_song_visualizer_html(payload), encoding="utf-8")
-    return json_path, html_path
+    return json_path
 
 
 def predict_anonymous_slots(
@@ -105,7 +101,7 @@ def predict_anonymous_slots(
     out_dir: Path,
     max_waveform_points: int = 2000,
     min_segment_seconds: float = 0.02,
-) -> tuple[Path, Path]:
+) -> Path:
     audio_path = audio_path.resolve()
     run_dir = run_dir.resolve()
     out_dir = out_dir.resolve()
@@ -119,8 +115,13 @@ def predict_anonymous_slots(
     checkpoint = load_training_checkpoint(run_dir, device)
     if checkpoint.get("target") != "anonymous_slots_v1":
         raise ValueError(f"{run_dir} is not an anonymous_slots_v1 checkpoint")
+    architecture = checkpoint.get("architecture")
+    if architecture != "slot_attention_event_v1":
+        raise ValueError(
+            f"{run_dir} uses architecture {architecture!r}; expected 'slot_attention_event_v1'"
+        )
     max_tracks = int(checkpoint.get("max_tracks") or 16)
-    model = CNNTCNSlotModel(max_tracks=max_tracks).to(device)
+    model = SlotAttentionEventModel(max_tracks=max_tracks).to(device)
     model.load_state_dict(checkpoint["model"])
     model.eval()
     with (
@@ -129,23 +130,22 @@ def predict_anonymous_slots(
     ):
         predictions = model(waveform.to(device).unsqueeze(0))
 
-    phase_prob = torch.softmax(predictions["slot_phase"][0], dim=1).cpu()
-    phase = torch.argmax(phase_prob, dim=1)
+    probabilities = {
+        name: torch.sigmoid(predictions[name][0]).cpu()
+        for name in ("slot_active", *SLOT_BOUNDARY_NAMES)
+    }
     activity = torch.sigmoid(predictions["slot_activity"][0]).cpu()
     frame_seconds = HOP_LENGTH / SAMPLE_RATE
-    min_frames = max(1, int(round(min_segment_seconds / frame_seconds)))
+    min_frames = max(0, int(round(min_segment_seconds / frame_seconds)))
     slots = [
-        {
-            "slot": f"track_{slot_index:02d}",
-            "activity_probability": float(activity[slot_index]),
-            "segments": _phase_segments(
-                phase[slot_index],
-                phase_prob[slot_index],
-                frame_seconds,
-                duration,
-                min_frames,
-            ),
-        }
+        _decoded_slot_payload(
+            slot_index,
+            probabilities,
+            activity,
+            frame_seconds,
+            duration,
+            min_frames,
+        )
         for slot_index in range(max_tracks)
     ]
     viewer_audio = _write_viewer_audio(waveform, audio_path, out_dir)
@@ -161,6 +161,7 @@ def predict_anonymous_slots(
         "model": {
             "run_dir": str(run_dir),
             "target": "anonymous_slots_v1",
+            "architecture": "slot_attention_event_v1",
             "max_tracks": max_tracks,
             "hop_length": HOP_LENGTH,
             "frame_seconds": frame_seconds,
@@ -174,42 +175,160 @@ def predict_anonymous_slots(
         json.dumps(payload, allow_nan=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    html_path = out_dir / "visualizer.html"
-    html_path.write_text(_slot_visualizer_html(payload), encoding="utf-8")
-    return json_path, html_path
+    return json_path
 
 
-def _phase_segments(
-    phase: torch.Tensor,
-    phase_prob: torch.Tensor,
+def _decoded_slot_payload(
+    slot_index: int,
+    probabilities: dict[str, torch.Tensor],
+    activity: torch.Tensor,
     frame_seconds: float,
     duration: float,
     min_frames: int,
-) -> list[dict[str, float | str]]:
-    names = {
-        SLOT_PHASE_ATTACK: "attack",
-        SLOT_PHASE_HELD: "held",
-        SLOT_PHASE_RELEASE: "release",
+) -> dict[str, Any]:
+    slot_probabilities = {
+        name: probabilities[name][slot_index] for name in ("slot_active", *SLOT_BOUNDARY_NAMES)
     }
-    segments: list[dict[str, float | str]] = []
-    start = 0
-    current = int(phase[0]) if phase.numel() else 0
-    for index in range(1, int(phase.numel()) + 1):
-        value = int(phase[index]) if index < phase.numel() else -1
-        if value == current:
+    events = decode_slot_events(slot_probabilities, frame_seconds, duration, min_frames=min_frames)
+    return {
+        "slot": f"track_{slot_index:02d}",
+        "activity_probability": float(activity[slot_index]),
+        "raw_event_count": len(events),
+        "boundary_probabilities": {
+            name.replace("slot_", ""): [float(value) for value in slot_probabilities[name]]
+            for name in SLOT_BOUNDARY_NAMES
+        },
+        "events": events,
+        "segments": _events_to_segments(events),
+    }
+
+
+def decode_slot_events(
+    probabilities: dict[str, torch.Tensor],
+    frame_seconds: float,
+    duration: float,
+    threshold: float = 0.35,
+    min_frames: int = 1,
+) -> list[dict[str, Any]]:
+    onset_peaks = _boundary_peaks(probabilities["slot_onset"], threshold=threshold)
+    offset_peaks = _boundary_peaks(probabilities["slot_offset"], threshold=threshold)
+    attack_peaks = _boundary_peaks(probabilities["slot_attack_end"], threshold=0.25)
+    release_peaks = _boundary_peaks(probabilities["slot_release_start"], threshold=0.25)
+    used_offsets: set[int] = set()
+    events: list[dict[str, Any]] = []
+    for onset in onset_peaks:
+        offset = next(
+            (peak for peak in offset_peaks if peak > onset and peak not in used_offsets),
+            None,
+        )
+        if offset is None or offset - onset < min_frames:
             continue
-        if current in names and index - start >= min_frames:
-            probability = float(phase_prob[current, start:index].mean())
+        used_offsets.add(offset)
+        attack_end = _best_inner_peak(attack_peaks, probabilities["slot_attack_end"], onset, offset)
+        release_start = _best_inner_peak(
+            release_peaks,
+            probabilities["slot_release_start"],
+            attack_end,
+            offset,
+        )
+        attack_end = max(onset, min(attack_end, offset))
+        release_start = max(attack_end, min(release_start, offset))
+        start_seconds = max(0.0, min(duration, onset * frame_seconds))
+        end_seconds = max(start_seconds, min(duration, offset * frame_seconds))
+        events.append(
+            {
+                "start_seconds": start_seconds,
+                "end_seconds": end_seconds,
+                "onset_seconds": start_seconds,
+                "attack_end_seconds": max(
+                    start_seconds,
+                    min(duration, attack_end * frame_seconds),
+                ),
+                "release_start_seconds": max(
+                    start_seconds,
+                    min(duration, release_start * frame_seconds),
+                ),
+                "offset_seconds": end_seconds,
+                "onset_probability": float(probabilities["slot_onset"][onset]),
+                "attack_end_probability": float(probabilities["slot_attack_end"][attack_end]),
+                "release_start_probability": float(
+                    probabilities["slot_release_start"][release_start]
+                ),
+                "offset_probability": float(probabilities["slot_offset"][offset]),
+                "active_probability": float(
+                    probabilities["slot_active"][onset : offset + 1].mean()
+                ),
+            }
+        )
+    return events
+
+
+def _boundary_peaks(
+    probability: torch.Tensor, threshold: float, min_distance: int = 2
+) -> list[int]:
+    if probability.numel() == 0:
+        return []
+    candidates: list[tuple[float, int]] = []
+    for index in range(int(probability.numel())):
+        value = float(probability[index])
+        if value < threshold:
+            continue
+        left = float(probability[index - 1]) if index > 0 else -math.inf
+        right = float(probability[index + 1]) if index + 1 < probability.numel() else -math.inf
+        if value >= left and value >= right:
+            candidates.append((value, index))
+    candidates.sort(reverse=True)
+    selected: list[int] = []
+    for _value, index in candidates:
+        if all(abs(index - existing) >= min_distance for existing in selected):
+            selected.append(index)
+    return sorted(selected)
+
+
+def _best_inner_peak(peaks: list[int], probability: torch.Tensor, start: int, stop: int) -> int:
+    inner = [peak for peak in peaks if start <= peak <= stop]
+    if inner:
+        return max(inner, key=lambda peak: float(probability[peak]))
+    if stop <= start:
+        return start
+    search = probability[start : stop + 1]
+    return start + int(torch.argmax(search).item())
+
+
+def _events_to_segments(events: list[dict[str, Any]]) -> list[dict[str, float | str]]:
+    segments: list[dict[str, float | str]] = []
+    for event in events:
+        spans = (
+            (
+                "attack",
+                event["onset_seconds"],
+                event["attack_end_seconds"],
+                event["onset_probability"],
+            ),
+            (
+                "held",
+                event["attack_end_seconds"],
+                event["release_start_seconds"],
+                event["active_probability"],
+            ),
+            (
+                "release",
+                event["release_start_seconds"],
+                event["offset_seconds"],
+                event["offset_probability"],
+            ),
+        )
+        for phase, start, end, probability in spans:
+            if end <= start:
+                continue
             segments.append(
                 {
-                    "phase": names[current],
-                    "start_seconds": max(0.0, start * frame_seconds),
-                    "end_seconds": min(duration, index * frame_seconds),
-                    "probability": probability,
+                    "phase": phase,
+                    "start_seconds": float(start),
+                    "end_seconds": float(end),
+                    "probability": float(probability),
                 }
             )
-        start = index
-        current = value
     return segments
 
 
@@ -279,125 +398,3 @@ def _waveform_peaks(waveform: np.ndarray, max_points: int) -> list[list[float]]:
     padded = np.pad(waveform, (0, padded_length - waveform.size))
     buckets = padded.reshape(point_count, bucket_size)
     return [[float(np.min(bucket)), float(np.max(bucket))] for bucket in buckets]
-
-
-def _slot_visualizer_html(payload: dict[str, Any]) -> str:
-    payload_json = json.dumps(payload, sort_keys=True)
-    html = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Comet Anonymous Slot Visualizer</title>
-<style>
-:root{color-scheme:dark;--bg:#101214;--panel:#191d21;--line:#303740;--text:#f1f3f4;--muted:#a9b0b7;--attack:#f2bf5e;--held:#4dbf87;--release:#5fa8e8}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}
-header{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:16px;padding:18px 22px;border-bottom:1px solid var(--line);background:#15181b;position:sticky;top:0;z-index:5}h1{font-size:18px;margin:0;font-weight:650;letter-spacing:0}
-.controls{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap}audio{width:min(680px,48vw)}.wrap{padding:18px 22px;display:grid;gap:16px}.field{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px}.field input[type=range]{width:190px}.field input[type=checkbox]{margin:0}
-.stats{display:flex;gap:10px;flex-wrap:wrap}.stat{border:1px solid var(--line);border-radius:6px;background:var(--panel);padding:8px 10px;min-width:86px}.stat b{display:block;font-size:13px}.stat span{display:block;color:var(--muted);font-size:12px;margin-top:2px}
-.time{font-variant-numeric:tabular-nums;color:var(--muted);font-size:13px}.legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:12px}.key{display:flex;align-items:center;gap:6px}.swatch{width:12px;height:12px;border-radius:3px}.attack{background:var(--attack)}.held{background:var(--held)}.release{background:var(--release)}
-.viewport{border:1px solid var(--line);border-radius:8px;background:#131619;overflow:auto;overscroll-behavior:contain}.timeline{position:relative;min-width:100%;background:#131619}.ruler{height:32px;border-bottom:1px solid var(--line);display:grid;grid-template-columns:190px 1fr;background:#171b1f;position:sticky;top:0;z-index:3}.ruler-spacer{border-right:1px solid var(--line);position:sticky;left:0;background:#171b1f;z-index:4}.ruler-scale{position:relative}.tick{position:absolute;top:0;bottom:0;border-left:1px solid #38414a;font-size:11px;color:var(--muted);padding-left:5px;line-height:30px}
-.lane{display:grid;grid-template-columns:190px 1fr;min-height:54px;border-bottom:1px solid var(--line)}.lane:last-child{border-bottom:0}.lane-label{padding:9px 10px;border-right:1px solid var(--line);background:#171b1f;position:sticky;left:0;z-index:2}.lane-label b{display:block;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.lane-label span{display:block;color:var(--muted);font-size:12px;margin-top:3px}.lane-track{position:relative;min-height:54px;background:#111417}
-.event{position:absolute;top:13px;height:26px;border-radius:5px;border:1px solid rgba(255,255,255,.16);min-width:2px}.event.attack{background:var(--attack)}.event.held{background:var(--held)}.event.release{background:var(--release)}.playhead{position:absolute;top:0;bottom:0;width:2px;background:#fff;box-shadow:0 0 0 1px #000;pointer-events:none;z-index:4;will-change:transform}
-@media(max-width:760px){header{grid-template-columns:1fr}.controls{justify-content:flex-start}.lane,.ruler{grid-template-columns:130px 1fr}.wrap{padding:12px}h1{font-size:16px}audio{width:100%}.field input[type=range]{width:150px}}
-</style>
-</head>
-<body>
-<header><h1>Comet Anonymous Slot Visualizer</h1><div class="controls"><audio id="audio" controls preload="metadata"></audio><span class="time" id="timeReadout">0.000 / 0.000</span><label class="field">Zoom <input id="zoom" type="range" min="4" max="90" step="1" value="18"></label><label class="field"><input id="follow" type="checkbox" checked> Follow</label></div></header>
-<main class="wrap">
-<section class="stats" id="stats"></section>
-<section class="legend"><div class="key"><span class="swatch attack"></span>Attack</div><div class="key"><span class="swatch held"></span>Held</div><div class="key"><span class="swatch release"></span>Release</div></section>
-<section class="viewport" id="viewport"><div class="timeline" id="timeline"></div></section>
-</main>
-<script id="comet-data" type="application/json">__PAYLOAD__</script>
-<script>
-const data=JSON.parse(document.getElementById('comet-data').textContent);
-const audio=document.getElementById('audio');const viewport=document.getElementById('viewport');const timeline=document.getElementById('timeline');const stats=document.getElementById('stats');const timeReadout=document.getElementById('timeReadout');const zoom=document.getElementById('zoom');const follow=document.getElementById('follow');
-let playhead=null;let pxPerSec=Number(zoom.value);let rafId=0;audio.src=data.audio.viewer_audio_path;
-function fmt(value){return Number(value).toFixed(3)}function xFor(seconds){return Math.max(0,seconds*pxPerSec)}
-function renderStats(){const active=data.slots.filter(s=>s.segments.length>0).length;const segments=data.slots.reduce((n,s)=>n+s.segments.length,0);const rows=[['Duration',`${fmt(data.audio.duration_seconds)}s`],['Epoch',data.model.checkpoint_epoch??'unknown'],['Slots',data.model.max_tracks],['Active Slots',active],['Segments',segments],['Frame',`${fmt(data.model.frame_seconds*1000)}ms`]];stats.innerHTML='';rows.forEach(([label,value])=>{const el=document.createElement('div');el.className='stat';el.innerHTML=`<b>${value}</b><span>${label}</span>`;stats.appendChild(el)})}
-function chooseTickStep(){const target=90/pxPerSec;const steps=[.25,.5,1,2,5,10,15,30,60];return steps.find(step=>step>=target)||60}
-function renderRuler(duration){const ruler=document.createElement('div');ruler.className='ruler';const spacer=document.createElement('div');spacer.className='ruler-spacer';const scale=document.createElement('div');scale.className='ruler-scale';ruler.append(spacer,scale);const step=chooseTickStep();for(let t=0;t<=duration+0.0001;t+=step){const tick=document.createElement('div');tick.className='tick';tick.style.left=`${xFor(t)}px`;tick.textContent=`${t.toFixed(step<1?2:0)}s`;scale.appendChild(tick)}timeline.appendChild(ruler)}
-function renderSegment(track,segment){const block=document.createElement('div');block.className=`event ${segment.phase}`;block.title=`${segment.phase} ${fmt(segment.start_seconds)}-${fmt(segment.end_seconds)} p=${fmt(segment.probability)}`;block.style.left=`${xFor(segment.start_seconds)}px`;block.style.width=`${Math.max(2,xFor(segment.end_seconds-segment.start_seconds))}px`;track.appendChild(block)}
-function renderLane(slot){const lane=document.createElement('div');lane.className='lane';const label=document.createElement('div');label.className='lane-label';label.innerHTML=`<b>${slot.slot}</b><span>${slot.segments.length} segments - activity ${fmt(slot.activity_probability)}</span>`;const track=document.createElement('div');track.className='lane-track';slot.segments.forEach(segment=>renderSegment(track,segment));lane.append(label,track);timeline.appendChild(lane)}
-function renderTimeline(){const duration=data.audio.duration_seconds;const oldScroll=viewport.scrollLeft;const contentWidth=Math.max(viewport.clientWidth,Math.ceil(xFor(duration)+190));timeline.style.width=`${contentWidth}px`;timeline.innerHTML='';renderRuler(duration);data.slots.forEach(slot=>renderLane(slot));playhead=document.createElement('div');playhead.className='playhead';timeline.appendChild(playhead);viewport.scrollLeft=Math.min(oldScroll,Math.max(0,contentWidth-viewport.clientWidth));updatePlayhead()}
-function updatePlayhead(){const duration=data.audio.duration_seconds;const current=Math.max(0,Math.min(duration,audio.currentTime||0));const absoluteX=190+xFor(current);timeReadout.textContent=`${fmt(current)} / ${fmt(duration)}`;if(playhead){playhead.style.transform=`translateX(${absoluteX}px)`}if(follow.checked&&!audio.paused){viewport.scrollLeft=Math.max(0,absoluteX-viewport.clientWidth*.35)}}
-function animate(){updatePlayhead();rafId=requestAnimationFrame(animate)}
-function rerenderForZoom(){const current=audio.currentTime||0;pxPerSec=Number(zoom.value);renderTimeline();viewport.scrollLeft=Math.max(0,190+xFor(current)-viewport.clientWidth*.35)}
-audio.addEventListener('play',()=>{if(!rafId){rafId=requestAnimationFrame(animate)}});audio.addEventListener('pause',()=>{if(rafId){cancelAnimationFrame(rafId);rafId=0}updatePlayhead()});audio.addEventListener('ended',()=>{if(rafId){cancelAnimationFrame(rafId);rafId=0}updatePlayhead()});audio.addEventListener('timeupdate',updatePlayhead);audio.addEventListener('loadedmetadata',updatePlayhead);zoom.addEventListener('input',rerenderForZoom);window.addEventListener('resize',renderTimeline);renderStats();renderTimeline();updatePlayhead();
-</script>
-</body></html>"""
-    return html.replace("__PAYLOAD__", payload_json)
-
-
-def _song_visualizer_html(payload: dict[str, Any]) -> str:
-    payload_json = json.dumps(payload, sort_keys=True)
-    html = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Comet Song Predictions</title>
-<style>
-:root{color-scheme:dark;--bg:#111315;--panel:#1a1f24;--line:#343c45;--text:#f2f4f6;--muted:#aab2ba;--accent:#f06c64;--wave:#78add0;--play:#fff;--table:#15191d}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}
-header{position:sticky;top:0;z-index:20;background:#161a1e;border-bottom:1px solid var(--line);padding:14px 18px;display:grid;gap:12px}h1{margin:0;font-size:18px;font-weight:650}
-.bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap}audio{width:min(760px,100%)}label{font-size:12px;color:var(--muted);display:flex;gap:7px;align-items:center}input[type=range]{width:190px}.time{font-variant-numeric:tabular-nums;color:var(--muted);font-size:13px}
-main{padding:16px 18px;display:grid;gap:14px}.stats{display:flex;gap:10px;flex-wrap:wrap}.stat{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:8px 10px;min-width:112px}.stat b{display:block;font-size:13px}.stat span{display:block;color:var(--muted);font-size:12px;margin-top:2px}
-.viewport{border:1px solid var(--line);background:#0e1114;border-radius:8px;overflow:auto;overscroll-behavior:contain}.timeline{position:relative;min-width:100%;background:#101316}.ruler{position:sticky;top:0;height:30px;background:#171b20;border-bottom:1px solid var(--line);z-index:5}.tick{position:absolute;top:0;bottom:0;border-left:1px solid #3d4650;color:var(--muted);font-size:11px;line-height:28px;padding-left:5px;pointer-events:none}
-.wave-wrap{position:relative;height:300px;border-bottom:1px solid var(--line);cursor:crosshair}canvas{position:sticky;left:0;top:0}.playhead{position:absolute;left:0;top:0;width:2px;background:var(--play);box-shadow:0 0 0 1px #000;z-index:8;pointer-events:none;will-change:transform}.wave-playhead{height:300px}.lane-playhead{height:100%}
-.tooltip{display:none;position:fixed;z-index:30;background:#20262c;border:1px solid var(--line);border-radius:6px;padding:7px 9px;font-size:12px;color:var(--text);pointer-events:none;box-shadow:0 8px 28px rgba(0,0,0,.35);white-space:nowrap}
-.lanes{position:relative;background:#111519}.lane-label{position:absolute;left:0;width:150px;height:26px;background:#171b20;border-right:1px solid var(--line);border-bottom:1px solid #252c33;padding:6px 8px;font-size:12px;color:var(--muted);z-index:3;pointer-events:none}
-.table-wrap{border:1px solid var(--line);border-radius:8px;overflow:auto;background:var(--table);max-height:360px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:8px 10px;border-bottom:1px solid #283039;text-align:left;white-space:nowrap}th{position:sticky;top:0;background:#1a1f24;color:var(--muted);z-index:2}tr:hover{background:#20262c}.empty{padding:18px;color:var(--muted)}
-@media(max-width:760px){main{padding:12px}header{padding:12px}.wave-wrap{height:240px}}
-</style>
-</head>
-<body>
-<header>
-<h1>Comet Song Predictions</h1>
-<div class="bar"><audio id="audio" controls preload="metadata"></audio><span class="time" id="time">0.000 / 0.000</span><label>Zoom <input id="zoom" type="range" min="4" max="420" value="24"></label><label><input id="follow" type="checkbox" checked> Follow</label></div>
-</header>
-<main>
-<section class="stats" id="stats"></section>
-<section class="viewport" id="viewport"><div class="timeline" id="timeline"><div class="ruler" id="ruler"></div><div class="wave-wrap" id="waveWrap"><canvas id="wave"></canvas><div class="playhead wave-playhead" id="playhead"></div></div><div class="lanes" id="lanes"><canvas id="lanesCanvas"></canvas><div class="playhead lane-playhead" id="lanePlayhead"></div></div></div></section>
-<section class="table-wrap"><table><thead><tr><th>#</th><th>Time</th><th>Onset</th><th>Primary Source</th><th>Source Prob</th><th>Other Sources</th></tr></thead><tbody id="marks"></tbody></table></section>
-</main>
-<div class="tooltip" id="tooltip"></div>
-<script id="comet-data" type="application/json">__PAYLOAD__</script>
-<script>
-const data=JSON.parse(document.getElementById('comet-data').textContent);
-const audio=document.getElementById('audio'),time=document.getElementById('time'),zoom=document.getElementById('zoom');
-const follow=document.getElementById('follow'),viewport=document.getElementById('viewport'),timeline=document.getElementById('timeline');
-const ruler=document.getElementById('ruler'),waveWrap=document.getElementById('waveWrap'),wave=document.getElementById('wave');
-const lanes=document.getElementById('lanes'),lanesCanvas=document.getElementById('lanesCanvas'),playhead=document.getElementById('playhead'),lanePlayhead=document.getElementById('lanePlayhead');
-const stats=document.getElementById('stats'),marksBody=document.getElementById('marks'),tooltip=document.getElementById('tooltip');
-const duration=data.audio.duration_seconds;const dpr=Math.max(1,window.devicePixelRatio||1);audio.src=data.audio.viewer_audio_path;
-let pxPerSec=Number(zoom.value);let layoutWidth=0;let renderQueued=false;let rafId=0;
-function fmt(v,d=3){return Number(v).toFixed(d)}function xFor(t){return t*pxPerSec}function tFor(x){return Math.max(0,Math.min(duration,x/pxPerSec))}
-function renderStats(){const rows=[['Duration',`${fmt(duration)}s`],['Marks',data.marks.length],['Threshold',data.model.threshold],['NMS',`${fmt(data.model.nms_seconds*1000,1)}ms`],['Frame',`${fmt(data.model.frame_seconds*1000,2)}ms`],['Sample Rate',data.audio.model_sample_rate]];stats.innerHTML='';rows.forEach(([label,value])=>{const el=document.createElement('div');el.className='stat';el.innerHTML=`<b>${value}</b><span>${label}</span>`;stats.appendChild(el)})}
-function setCanvasSize(canvas,width,height){canvas.style.width=`${width}px`;canvas.style.height=`${height}px`;canvas.width=Math.max(1,Math.round(width*dpr));canvas.height=Math.max(1,Math.round(height*dpr));const ctx=canvas.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);return ctx}
-function queueRender(){if(renderQueued)return;renderQueued=true;requestAnimationFrame(()=>{renderQueued=false;renderAll()})}
-function renderAll(){pxPerSec=Number(zoom.value);layoutWidth=Math.max(viewport.clientWidth,Math.ceil(duration*pxPerSec));const visibleWidth=Math.max(1,viewport.clientWidth);const waveHeight=waveWrap.clientHeight;const laneHeight=data.model.source_types.length*26;timeline.style.width=`${layoutWidth}px`;waveWrap.style.width=`${layoutWidth}px`;lanes.style.width=`${layoutWidth}px`;lanes.style.height=`${laneHeight}px`;renderRuler();drawWave(setCanvasSize(wave,visibleWidth,waveHeight),visibleWidth,waveHeight,viewport.scrollLeft);drawLanes(setCanvasSize(lanesCanvas,visibleWidth,laneHeight),visibleWidth,laneHeight,viewport.scrollLeft);updatePlayhead()}
-function renderRuler(){ruler.innerHTML='';const candidates=[.1,.25,.5,1,2,5,10,15,30,60];let step=candidates[candidates.length-1];for(const c of candidates){if(c*pxPerSec>=72){step=c;break}}for(let t=0;t<=duration+.001;t+=step){const tick=document.createElement('div');tick.className='tick';tick.style.left=`${xFor(t)}px`;tick.textContent=step<1?`${fmt(t,2)}s`:`${Math.round(t)}s`;ruler.appendChild(tick)}}
-function drawWave(ctx,width,height,scrollX){ctx.clearRect(0,0,width,height);ctx.fillStyle='#101316';ctx.fillRect(0,0,width,height);ctx.strokeStyle='rgba(120,173,208,.95)';ctx.lineWidth=1;ctx.beginPath();const peaks=data.waveform;const mid=height/2;const usable=height*.9;if(peaks.length<2)return;const step=width>900?2:1;for(let x=0;x<width;x+=step){const time=tFor(scrollX+x);const idx=Math.max(0,Math.min(peaks.length-1,Math.floor((time/duration)*peaks.length)));const p=peaks[idx];ctx.moveTo(x,mid+p[0]*usable*.5);ctx.lineTo(x,mid+p[1]*usable*.5)}ctx.stroke();ctx.strokeStyle='rgba(255,255,255,.12)';ctx.beginPath();ctx.moveTo(0,mid);ctx.lineTo(width,mid);ctx.stroke()}
-function drawLanes(ctx,width,height,scrollX){ctx.clearRect(0,0,width,height);ctx.fillStyle='#111519';ctx.fillRect(0,0,width,height);ctx.font='12px Inter, system-ui, sans-serif';const start=tFor(scrollX)-.05;const end=tFor(scrollX+width)+.05;data.model.source_types.forEach((source,i)=>{const y=i*26;ctx.fillStyle='#171b20';ctx.fillRect(0,y,150,26);ctx.strokeStyle='#252c33';ctx.beginPath();ctx.moveTo(0,y+25.5);ctx.lineTo(width,y+25.5);ctx.stroke();ctx.fillStyle='#aab2ba';ctx.fillText(source,8,y+17);for(const m of data.marks){if(m.time_seconds<start||m.time_seconds>end)continue;const hit=m.sources.find(s=>s.source_type===source);if(!hit)continue;ctx.fillStyle=`rgba(139,207,155,${Math.max(.25,hit.probability)})`;ctx.fillRect(Math.round(xFor(m.time_seconds)-scrollX),y+8,2,11)}})}
-function renderTable(){marksBody.innerHTML='';if(!data.marks.length){marksBody.innerHTML='<tr><td class="empty" colspan="6">No marks</td></tr>';return}const frag=document.createDocumentFragment();data.marks.forEach(m=>{const tr=document.createElement('tr');const other=m.sources.slice(1).map(s=>`${s.source_type} ${fmt(s.probability,2)}`).join(', ');tr.innerHTML=`<td>${m.index}</td><td>${fmt(m.time_seconds)}</td><td>${fmt(m.onset_probability,3)}</td><td>${m.primary_source}</td><td>${fmt(m.primary_source_probability,3)}</td><td>${other}</td>`;tr.addEventListener('click',()=>seek(m.time_seconds,true));frag.appendChild(tr)});marksBody.appendChild(frag)}
-function nearestMark(time,maxSeconds){let best=null,bestDist=maxSeconds;for(const m of data.marks){const dist=Math.abs(m.time_seconds-time);if(dist<bestDist){best=m;bestDist=dist}}return best}
-function describeMark(m){return `#${m.index} ${fmt(m.time_seconds)}s - ${m.primary_source} ${fmt(m.primary_source_probability,2)} - onset ${fmt(m.onset_probability,2)}`}
-function timelineXFromWaveEvent(event){const rect=waveWrap.getBoundingClientRect();return event.clientX-rect.left}
-function seek(seconds,play=false){audio.currentTime=Math.max(0,Math.min(duration,seconds));if(play)audio.play();updatePlayhead()}
-function updatePlayhead(){const absoluteX=xFor(audio.currentTime||0);const visibleX=absoluteX-viewport.scrollLeft;const display=visibleX>=0&&visibleX<=viewport.clientWidth?'block':'none';playhead.style.transform=`translateX(${absoluteX}px)`;lanePlayhead.style.transform=`translateX(${absoluteX}px)`;playhead.style.display=display;lanePlayhead.style.display=display;time.textContent=`${fmt(audio.currentTime||0)} / ${fmt(duration)}`;if(follow.checked&&!audio.paused){viewport.scrollLeft=Math.max(0,absoluteX-viewport.clientWidth*.35)}}
-function playLoop(){updatePlayhead();rafId=requestAnimationFrame(playLoop)}
-audio.addEventListener('play',()=>{cancelAnimationFrame(rafId);playLoop()});audio.addEventListener('pause',()=>{cancelAnimationFrame(rafId);updatePlayhead()});audio.addEventListener('seeked',updatePlayhead);audio.addEventListener('loadedmetadata',updatePlayhead);
-zoom.addEventListener('input',()=>{const centerTime=tFor(viewport.scrollLeft+viewport.clientWidth*.5);queueRender();requestAnimationFrame(()=>{viewport.scrollLeft=Math.max(0,xFor(centerTime)-viewport.clientWidth*.5)})});
-viewport.addEventListener('wheel',event=>{if(!event.ctrlKey)return;event.preventDefault();const rect=viewport.getBoundingClientRect();const anchorX=viewport.scrollLeft+event.clientX-rect.left;const anchorTime=tFor(anchorX);const factor=event.deltaY<0?1.16:1/1.16;zoom.value=String(Math.max(Number(zoom.min),Math.min(Number(zoom.max),Number(zoom.value)*factor)));queueRender();requestAnimationFrame(()=>{viewport.scrollLeft=Math.max(0,xFor(anchorTime)-(event.clientX-rect.left))})},{passive:false});
-waveWrap.addEventListener('click',event=>{seek(tFor(timelineXFromWaveEvent(event)),false)});
-waveWrap.addEventListener('mousemove',event=>{const x=timelineXFromWaveEvent(event);const m=nearestMark(tFor(x),Math.max(.025,8/pxPerSec));if(!m){tooltip.style.display='none';return}tooltip.textContent=describeMark(m);tooltip.style.left=`${event.clientX+12}px`;tooltip.style.top=`${event.clientY+12}px`;tooltip.style.display='block'});
-waveWrap.addEventListener('mouseleave',()=>{tooltip.style.display='none'});
-window.addEventListener('keydown',event=>{if(event.code!=='Space')return;const tag=(event.target&&event.target.tagName)||'';if(['INPUT','BUTTON','SELECT','TEXTAREA'].includes(tag))return;event.preventDefault();if(audio.paused)audio.play();else audio.pause()});
-window.addEventListener('resize',queueRender);
-viewport.addEventListener('scroll',queueRender,{passive:true});
-renderStats();renderTable();renderAll();updatePlayhead();
-</script>
-</body></html>"""
-    return html.replace("__PAYLOAD__", payload_json)

@@ -136,23 +136,23 @@ Recommended starter packs:
 Generate percussion-only training clips from imported assets:
 
 ```powershell
-uv run comet generate --count 10000 --seed 400000 --out data/generated/percussion_slots_10k --composition-profile percussion_v1 --assets assets/library --renderer-profile plugin_v1 --include-tag percussion --no-procedural-fallback --source-count-min 1 --source-count-max 16 --training-layout --no-stems --no-visualizer
+uv run comet generate --count 10000 --seed 400000 --out data/generated/percussion_slots_10k --composition-profile percussion_v1 --assets assets/library --renderer-profile plugin_v1 --include-tag percussion --no-procedural-fallback --source-count-min 1 --source-count-max 16 --training-layout --no-stems
 ```
 
 `percussion_v1` chooses only percussion-family source buckets and varies rhythm templates across straight, half-time, breakbeat, two-step, triplet, sparse, fill, solo-hit, dense-hat, and foley-style patterns. Loops remain out of scope because repeated attacks must be represented as metadata events.
 
-After training, run the timing model on an arbitrary song and write an interactive HTML viewer:
+After training, run the timing model on an arbitrary song:
 
 ```powershell
 uv run comet predict-song --audio C:\path\song.wav --run runs/cnn_tcn_v1 --out data/generated/song_predictions
 ```
 
-The command writes `predictions.json`, copies the source audio into the output folder for browser playback, and writes `visualizer.html` with waveform display, playback controls, zoom, horizontal scrolling, decoded onset marks, and source-type lanes. The model runs at 44.1 kHz; other input sample rates are resampled for inference.
+The command writes `predictions.json` and copies the source audio into the output folder for browser playback. Open `src/comet_audio/comet_visualizer.html` in a browser and use Open Files or Open Directory to inspect prediction JSON, generated metadata, and audio together. The model runs at 44.1 kHz; other input sample rates are resampled for inference.
 
 For training datasets with minimal disk use, write a single root with only mono mixes, metadata, and a manifest:
 
 ```powershell
-uv run comet generate --count 10000 --seed 100000 --out data/generated/train_10k --training-layout --no-stems --no-visualizer
+uv run comet generate --count 10000 --seed 100000 --out data/generated/train_10k --training-layout --no-stems
 ```
 
 That layout is:
@@ -205,9 +205,8 @@ Each clip directory contains:
 The batch root contains:
 
 - `manifest.jsonl`
-- `visualizer.html`
 
-Open `visualizer.html` in a browser to inspect the generated clips. It embeds batch metadata, plays the mix or any source stem, and shows per-source lanes with onset, attack, held, and release regions for each event.
+Open `src/comet_audio/comet_visualizer.html` in a browser to inspect generated clips, prediction JSON, and audio. Use Open Files or Open Directory to load the relevant metadata, predictions, and WAV files.
 
 ## Scope
 

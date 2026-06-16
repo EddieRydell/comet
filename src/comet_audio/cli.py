@@ -59,10 +59,6 @@ def generate(
             help="Allowed meter. Repeat to provide a pool, e.g. -t 3/4 -t 7/4.",
         ),
     ] = None,
-    visualizer: Annotated[
-        bool,
-        typer.Option("--visualizer/--no-visualizer", help="Write visualizer.html."),
-    ] = True,
     stems: Annotated[bool, typer.Option(help="Write per-source stem WAV files.")] = True,
     training_layout: Annotated[
         bool,
@@ -115,7 +111,6 @@ def generate(
         count=count,
         seed=seed,
         config=config,
-        write_visualizer=visualizer,
         write_stems=stems,
         flat_layout=training_layout,
         assets=assets,
@@ -705,7 +700,7 @@ def predict_song_command(
     ] = 2000,
 ) -> None:
     """Run a trained timing model on a song and write an interactive prediction viewer."""
-    json_path, html_path = predict_song(
+    json_path = predict_song(
         audio_path=audio,
         run_dir=run,
         out_dir=out,
@@ -715,7 +710,6 @@ def predict_song_command(
         max_waveform_points=max_waveform_points,
     )
     typer.echo(f"Wrote {json_path}")
-    typer.echo(f"Wrote {html_path}")
 
 
 @app.command("predict-slots")
@@ -737,7 +731,7 @@ def predict_slots_command(
     ] = 0.02,
 ) -> None:
     """Run an anonymous slot model and write a generated-data-style lane viewer."""
-    json_path, html_path = predict_anonymous_slots(
+    json_path = predict_anonymous_slots(
         audio_path=audio,
         run_dir=run,
         out_dir=out,
@@ -745,4 +739,3 @@ def predict_slots_command(
         min_segment_seconds=min_segment_seconds,
     )
     typer.echo(f"Wrote {json_path}")
-    typer.echo(f"Wrote {html_path}")

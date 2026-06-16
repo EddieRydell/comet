@@ -24,7 +24,6 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--no-procedural-fallback", action="store_true")
     parser.add_argument("--training-layout", action="store_true")
-    parser.add_argument("--no-visualizer", action="store_true")
     parser.add_argument("--no-stems", action="store_true")
     args = parser.parse_args()
 
@@ -50,7 +49,6 @@ def main() -> None:
         count=args.count,
         seed=args.seed,
         config=config,
-        write_visualizer=not args.no_visualizer,
         write_stems=not args.no_stems,
         flat_layout=args.training_layout,
         assets=args.assets,

@@ -178,7 +178,6 @@ def generate_batch(
     count: int,
     seed: int,
     config: GeneratorConfig | None = None,
-    write_visualizer: bool = True,
     write_stems: bool = True,
     flat_layout: bool = False,
     assets: Path | None = None,
@@ -265,8 +264,6 @@ def generate_batch(
             )
             manifest.write(entry.model_dump_json() + "\n")
 
-    if write_visualizer:
-        write_visualizer_html(out_dir, clips)
     return clips
 
 
@@ -454,166 +451,6 @@ def generate_clip(
         encoding="utf-8",
     )
     return metadata
-
-
-def write_visualizer_html(out_dir: Path, clips: list[ClipMetadata]) -> None:
-    payload = [
-        {
-            "clip_id": f"clip_{index:04d}",
-            "metadata": clip.model_dump(mode="json"),
-        }
-        for index, clip in enumerate(clips)
-    ]
-    payload_json = json.dumps(payload, sort_keys=True)
-    html = "\n".join(
-        [
-            "<!doctype html>",
-            '<html lang="en">',
-            "<head>",
-            '<meta charset="utf-8">',
-            '<meta name="viewport" content="width=device-width, initial-scale=1">',
-            "<title>Comet Audio Visualizer</title>",
-            "<style>",
-            ":root{color-scheme:dark;--bg:#101214;--panel:#191d21;--line:#303740;"
-            "--text:#f1f3f4;--muted:#a9b0b7;--attack:#f2bf5e;--held:#4dbf87;"
-            "--release:#5fa8e8}",
-            "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);"
-            "font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}",
-            "header{display:flex;align-items:center;justify-content:space-between;gap:16px;"
-            "padding:18px 22px;border-bottom:1px solid var(--line);background:#15181b;position:sticky;"
-            "top:0;z-index:5}h1{font-size:18px;margin:0;font-weight:650;letter-spacing:0}",
-            ".controls{display:flex;align-items:end;gap:12px;flex-wrap:wrap}.field{display:grid;gap:6px}"
-            "label{font-size:12px;color:var(--muted)}select,button{height:34px;border:1px solid #3a424b;"
-            "background:#20252a;color:var(--text);border-radius:6px;padding:0 10px;font:inherit}"
-            "button{cursor:pointer;min-width:40px}.wrap{padding:18px 22px;display:grid;gap:16px}",
-            ".stats{display:flex;gap:10px;flex-wrap:wrap}.stat{border:1px solid var(--line);"
-            "border-radius:6px;background:var(--panel);padding:8px 10px;min-width:86px}.stat b{display:block;"
-            "font-size:13px}.stat span{display:block;color:var(--muted);font-size:12px;margin-top:2px}",
-            ".transport{display:grid;grid-template-columns:minmax(260px,1fr) auto;gap:14px;align-items:center;"
-            "border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:12px}"
-            "audio{width:100%}.time{font-variant-numeric:tabular-nums;color:var(--muted);font-size:13px}",
-            ".legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:12px}.key{display:flex;"
-            "align-items:center;gap:6px}.swatch{width:12px;height:12px;border-radius:3px}.attack{background:var(--attack)}"
-            ".held{background:var(--held)}.release{background:var(--release)}",
-            ".timeline{position:relative;border:1px solid var(--line);border-radius:8px;background:#131619;"
-            "overflow:hidden}.ruler{height:32px;border-bottom:1px solid var(--line);display:grid;"
-            "grid-template-columns:190px minmax(520px,1fr);background:#171b1f}.ruler-spacer{border-right:1px solid var(--line)}"
-            ".ruler-scale{position:relative}.tick{position:absolute;top:0;bottom:0;border-left:1px solid #38414a;"
-            "font-size:11px;color:var(--muted);padding-left:5px;line-height:30px}",
-            ".lane{display:grid;grid-template-columns:190px minmax(520px,1fr);min-height:54px;border-bottom:1px solid "
-            "var(--line)}.lane:last-child{border-bottom:0}.lane-label{padding:9px 10px;border-right:1px solid "
-            "var(--line);background:#171b1f}.lane-label b{display:block;font-size:13px;white-space:nowrap;"
-            "overflow:hidden;text-overflow:ellipsis}.lane-label span{display:block;color:var(--muted);font-size:12px;"
-            "margin-top:3px}.lane-track{position:relative;min-height:54px;background:#111417}",
-            ".event{position:absolute;top:13px;height:26px;border-radius:5px;overflow:hidden;border:1px solid "
-            "rgba(255,255,255,.16);display:flex;min-width:2px}.seg{height:100%;flex:0 0 auto}.seg.attack{"
-            "background:var(--attack)}.seg.held{background:var(--held)}.seg.release{background:var(--release)}",
-            ".playhead{position:absolute;top:0;bottom:0;width:2px;background:#ffffff;box-shadow:0 0 0 1px #000;"
-            "pointer-events:none;z-index:4}.empty{padding:24px;color:var(--muted)}",
-            "@media(max-width:760px){header{align-items:stretch;flex-direction:column}.transport{grid-template-columns:1fr}"
-            ".lane,.ruler{grid-template-columns:130px minmax(420px,1fr)}.wrap{padding:12px}h1{font-size:16px}}",
-            "</style>",
-            "</head>",
-            "<body>",
-            "<header>",
-            "<h1>Comet Audio Visualizer</h1>",
-            '<div class="controls">',
-            '<div class="field"><label for="clipSelect">Clip</label><select id="clipSelect"></select></div>',
-            '<div class="field"><label for="audioSelect">Audio</label><select id="audioSelect"></select></div>',
-            '<button id="prevButton" type="button" title="Previous clip">&lt;</button>',
-            '<button id="nextButton" type="button" title="Next clip">&gt;</button>',
-            "</div>",
-            "</header>",
-            '<main class="wrap">',
-            '<section class="stats" id="stats"></section>',
-            '<section class="transport"><audio id="audio" controls preload="metadata"></audio>'
-            '<div class="time" id="timeReadout">0.000 / 0.000</div></section>',
-            '<section class="legend"><div class="key"><span class="swatch attack"></span>Attack</div>'
-            '<div class="key"><span class="swatch held"></span>Held</div>'
-            '<div class="key"><span class="swatch release"></span>Release</div></section>',
-            '<section class="timeline" id="timeline"></section>',
-            "</main>",
-            f'<script id="comet-data" type="application/json">{payload_json}</script>',
-            "<script>",
-            "const clips=JSON.parse(document.getElementById('comet-data').textContent);",
-            "const clipSelect=document.getElementById('clipSelect');",
-            "const audioSelect=document.getElementById('audioSelect');",
-            "const audio=document.getElementById('audio');",
-            "const timeline=document.getElementById('timeline');",
-            "const stats=document.getElementById('stats');",
-            "const timeReadout=document.getElementById('timeReadout');",
-            "const prevButton=document.getElementById('prevButton');",
-            "const nextButton=document.getElementById('nextButton');",
-            "let currentIndex=0;let selectedClip=null;let playhead=null;",
-            "const sourceColors={kick:'#e16f64',snare_clap:'#d89547',hat_noise:'#b9b84d',fm_bass:'#45a86f',"
-            "fm_growl:'#46a6a5',wub_bass:'#5b8fd8',pluck_stab:'#a16fd1',riser_impact:'#d36fa2'};",
-            "function fmt(value){return Number(value).toFixed(3)}",
-            "function pct(value,duration){return Math.max(0,Math.min(100,(value/duration)*100))}",
-            "function clipPath(clip,path){return `${clip.clip_id}/${path}`}",
-            "function sourceLabel(source){return `${source.source_id} - ${source.source_type}`}",
-            "function setOptions(){clips.forEach((clip,index)=>{const option=document.createElement('option');"
-            "const m=clip.metadata;option.value=String(index);option.textContent=`${clip.clip_id} - ${m.bpm} BPM - "
-            "${m.time_signature} - ${m.key} minor`;clipSelect.appendChild(option)})}",
-            "function renderStats(clip){const m=clip.metadata;stats.innerHTML='';"
-            "const rows=[['BPM',m.bpm],['Meter',m.time_signature],['Key',`${m.key} minor`],"
-            "['Duration',`${fmt(m.duration_seconds)}s`],['Sources',m.sources.length],['Events',m.events.length],"
-            "['Seed',m.seed]];rows.forEach(([label,value])=>{const el=document.createElement('div');el.className='stat';"
-            "el.innerHTML=`<b>${value}</b><span>${label}</span>`;stats.appendChild(el)})}",
-            "function renderAudioOptions(clip){const m=clip.metadata;audioSelect.innerHTML='';"
-            "const mix=document.createElement('option');mix.value=clipPath(clip,m.paths.mix);mix.textContent='mix.wav';"
-            "audioSelect.appendChild(mix);m.sources.forEach(source=>{const option=document.createElement('option');"
-            "option.value=clipPath(clip,source.stem_path);option.textContent=`${source.source_id} - ${source.source_type}`;"
-            "audioSelect.appendChild(option)});audio.src=audioSelect.value}",
-            "function renderRuler(duration){const ruler=document.createElement('div');ruler.className='ruler';"
-            "const spacer=document.createElement('div');spacer.className='ruler-spacer';const scale=document.createElement('div');"
-            "scale.className='ruler-scale';ruler.append(spacer,scale);"
-            "const step=duration<=10?1:2;for(let t=0;t<=duration+0.0001;t+=step){const tick=document.createElement('div');"
-            "tick.className='tick';tick.style.left=`${pct(t,duration)}%`;tick.textContent=`${t.toFixed(0)}s`;"
-            "scale.appendChild(tick)}timeline.appendChild(ruler)}",
-            "function eventTitle(event){const note=event.midi_note===null?'':` - MIDI ${event.midi_note}`;"
-            "return `${event.event_type}${note} - onset ${fmt(event.onset_seconds)} - attack "
-            "${fmt(event.attack_seconds)} - release ${fmt(event.release_seconds)} - offset ${fmt(event.offset_seconds)}`}",
-            "function renderEvent(track,event,duration,color){const start=event.onset_seconds;"
-            "const end=event.offset_seconds;const attackEnd=Math.min(end,start+event.attack_seconds);"
-            "const releaseStart=Math.max(attackEnd,end-event.release_seconds);"
-            "const total=Math.max(0.001,end-start);const block=document.createElement('div');block.className='event';"
-            "block.title=eventTitle(event);block.style.left=`${pct(start,duration)}%`;block.style.width="
-            "`${Math.max(.35,pct(total,duration))}%`;block.style.borderColor=color;"
-            "const attack=document.createElement('div');attack.className='seg attack';"
-            "attack.style.width=`${((attackEnd-start)/total)*100}%`;const held=document.createElement('div');"
-            "held.className='seg held';held.style.width=`${((releaseStart-attackEnd)/total)*100}%`;"
-            "const release=document.createElement('div');release.className='seg release';release.style.width="
-            "`${((end-releaseStart)/total)*100}%`;block.append(attack,held,release);track.appendChild(block)}",
-            "function renderLane(source,events,duration){const lane=document.createElement('div');lane.className='lane';"
-            "const label=document.createElement('div');label.className='lane-label';label.innerHTML="
-            "`<b>${sourceLabel(source)}</b><span>${events.length} events - gain ${source.gain_db} dB - pan ${source.pan}</span>`;"
-            "const track=document.createElement('div');track.className='lane-track';const color=sourceColors[source.source_type]||'#aaa';"
-            "events.forEach(event=>renderEvent(track,event,duration,color));lane.append(label,track);timeline.appendChild(lane)}",
-            "function renderTimeline(clip){const m=clip.metadata;timeline.innerHTML='';renderRuler(m.duration_seconds);"
-            "m.sources.forEach(source=>{const events=m.events.filter(event=>event.source_id===source.source_id);"
-            "renderLane(source,events,m.duration_seconds)});playhead=document.createElement('div');"
-            "playhead.className='playhead';playhead.style.left='0%';timeline.appendChild(playhead)}",
-            "function loadClip(index){currentIndex=(index+clips.length)%clips.length;selectedClip=clips[currentIndex];"
-            "clipSelect.value=String(currentIndex);renderStats(selectedClip);renderAudioOptions(selectedClip);"
-            "renderTimeline(selectedClip);updateTime()}",
-            "function updateTime(){const duration=selectedClip?selectedClip.metadata.duration_seconds:0;"
-            "const current=audio.currentTime||0;timeReadout.textContent=`${fmt(current)} / ${fmt(duration)}`;"
-            "if(playhead&&duration>0){const track=timeline.querySelector('.lane-track');"
-            "if(track){const timelineRect=timeline.getBoundingClientRect();const trackRect=track.getBoundingClientRect();"
-            "const x=(trackRect.left-timelineRect.left)+(Math.max(0,Math.min(1,current/duration))*trackRect.width);"
-            "playhead.style.left=`${x}px`}}}",
-            "clipSelect.addEventListener('change',event=>loadClip(Number(event.target.value)));",
-            "audioSelect.addEventListener('change',()=>{const wasPlaying=!audio.paused;const current=audio.currentTime;"
-            "audio.src=audioSelect.value;audio.currentTime=current;if(wasPlaying){audio.play()}});",
-            "audio.addEventListener('timeupdate',updateTime);audio.addEventListener('loadedmetadata',updateTime);",
-            "prevButton.addEventListener('click',()=>loadClip(currentIndex-1));",
-            "nextButton.addEventListener('click',()=>loadClip(currentIndex+1));",
-            "setOptions();if(clips.length){loadClip(0)}else{timeline.innerHTML='<div class=\"empty\">No clips</div>'}",
-            "</script>",
-            "</body></html>",
-        ]
-    )
-    (out_dir / "visualizer.html").write_text(html, encoding="utf-8")
 
 
 def _choose_sources(

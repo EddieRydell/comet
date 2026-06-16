@@ -306,7 +306,7 @@ def test_wavs_have_expected_shape_and_signal(tmp_path: Path) -> None:
         assert float(np.sqrt(np.mean(stem**2))) > 1e-5
 
 
-def test_batch_writes_manifest_and_visualizer(tmp_path: Path) -> None:
+def test_batch_writes_manifest_without_visualizer(tmp_path: Path) -> None:
     config = GeneratorConfig(sample_rate=22_050, duration_seconds=2.0)
     clips = generate_batch(tmp_path / "batch", count=2, seed=100, config=config)
 
@@ -316,16 +316,7 @@ def test_batch_writes_manifest_and_visualizer(tmp_path: Path) -> None:
     assert len(clips) == 2
     assert len(rows) == 2
     assert not (tmp_path / "batch" / "preview.html").exists()
-    visualizer = tmp_path / "batch" / "visualizer.html"
-    assert visualizer.exists()
-    visualizer_text = visualizer.read_text(encoding="utf-8")
-    assert "Comet Audio Visualizer" in visualizer_text
-    assert "Attack" in visualizer_text
-    assert "Held" in visualizer_text
-    assert "Release" in visualizer_text
-    assert "source_000" in visualizer_text
-    assert "ruler-scale" in visualizer_text
-    assert "trackRect.left-timelineRect.left" in visualizer_text
+    assert not (tmp_path / "batch" / "visualizer.html").exists()
     for index, row in enumerate(rows):
         clip_dir = tmp_path / "batch" / f"clip_{index:04d}"
         assert row["mix_path"] == f"clip_{index:04d}/mix.wav"
@@ -343,7 +334,6 @@ def test_training_layout_writes_mix_metadata_and_manifest_only(tmp_path: Path) -
         count=2,
         seed=200,
         config=config,
-        write_visualizer=False,
         write_stems=False,
         flat_layout=True,
     )
