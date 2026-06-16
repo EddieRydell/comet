@@ -52,6 +52,7 @@ These instructions apply to this repository.
 
 - The SSH alias is `upstairs`. It lands in a Windows shell on host `Upstairs_TV_PC`, not a Unix shell. Prefer simple `cmd` commands over POSIX shell syntax when using `ssh upstairs`.
 - There are multiple clones on that machine. The training/data clone used for long GPU runs is `C:\dev\comet`. Another clone may exist under the SSH user's home directory and may not have the large datasets.
+- Use Git as the default way to move source code between this machine and upstairs: commit and push local code, then fetch/pull in `C:\dev\comet`; for upstairs-originated source changes, commit them on a branch and push or create a patch from Git. Avoid `scp` for tracked source files because it lets the clones drift. Reserve `scp` for ignored artifacts such as checkpoints, metrics, selected audio clips, generated previews, and other large or disposable run outputs.
 - The 100k generated Surge dataset is at `C:\dev\comet\data\generated\surge_train_100k`. Its shards are under `C:\dev\comet\data\generated\surge_train_100k_shards`.
 - Existing helper scripts live in `C:\dev`, including training launch scripts such as `comet_train_100k_b16w1.cmd`. Confirm script contents before reuse because run directories and objectives may differ.
 - For overnight training, prefer launching a `.cmd` script with Windows Task Scheduler or another detached Windows mechanism so the job survives SSH session exit. Disable any future scheduled trigger after starting a one-off task to avoid duplicate launches.
