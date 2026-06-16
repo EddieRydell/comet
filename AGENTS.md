@@ -56,7 +56,7 @@ These instructions apply to this repository.
 - The 100k generated Surge dataset is at `C:\dev\comet\data\generated\surge_train_100k`. Its shards are under `C:\dev\comet\data\generated\surge_train_100k_shards`.
 - Existing helper scripts live in `C:\dev`, including training launch scripts such as `comet_train_100k_b16w1.cmd`. Confirm script contents before reuse because run directories and objectives may differ.
 - For overnight training, prefer launching a `.cmd` script with Windows Task Scheduler or another detached Windows mechanism so the job survives SSH session exit. Disable any future scheduled trigger after starting a one-off task to avoid duplicate launches.
-- Use `batch-size 16` and `loader-workers 1` for the current upstairs 100k slot-training setup unless the user asks to benchmark different values.
+- For the current upstairs 100k phase-first slot-training setup, prefer `batch-size 16` with `loader-workers 4` unless a fresh benchmark says otherwise. `batch-size 24` and `32` are viable but were slower in June 2026 phase-objective smoke benchmarks, while `40` and `48` crossed a severe slowdown cliff on the 16 GB RTX 5080. Re-benchmark after substantial model, crop-length, storage, or PyTorch changes.
 - Keep inference/viewer generation local when possible: copy `best.pt`, `metrics.jsonl`, and a few selected clips from upstairs rather than running extra inference on the training machine during an active training run.
 
 ## Assets And Generation
