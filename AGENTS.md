@@ -36,11 +36,17 @@ These instructions apply to this repository.
 
 ## Repository Hygiene
 
+- Treat this repository as a local research workbench for synthetic audio event data, anonymous-slot training, inference, evaluation, and static visualization.
+- Source code lives under `src/comet_audio`. Tests live under `tests`.
+- The canonical repo-local asset catalog is `assets/library/catalog.json`. Treat catalog metadata as the source of truth for asset IDs, renderer names, source taxonomy, paths, tags, and default gains.
+- Local sample/audio assets, imported packs, downloaded archives, generated datasets, checkpoints, run directories, tool binaries, previews, caches, and IDE files are ignored artifacts unless the user explicitly asks to track one.
+- The canonical visualizer source is `src/comet_audio/comet_visualizer.html`. Generated or copied visualizer HTML files under data, runs, previews, or ad hoc output folders are disposable artifacts.
 - Avoid unrelated edits to `uv.lock`, IDE files, generated datasets, model checkpoints, generated assets, and cache directories.
 - Do not edit `uv.lock` unless dependency changes are explicitly part of the task.
 - Check `pyproject.toml`, `src/comet_audio/cli.py`, and the relevant module before assuming a dependency, command, script entry point, or option belongs at the project root.
 - Do not use `.env` files or environment variables for project configuration in this codebase.
 - Do not commit large sample libraries, generated datasets, visualizer batches, checkpoints, or run artifacts unless the user specifically asks.
+- Keep local artifact cleanup conservative: preserve intentional catalog state, `assets/library/samples/` when reimporting would be annoying, `data/generated/best_so_far_eval`, and active meaningful training runs. It is fine to prune Python/tool caches, stale preview folders, generated visualizer copies, and smoke/bench runs after confirming they are not the current baseline.
 
 ## Upstairs Training Machine
 
@@ -60,3 +66,4 @@ These instructions apply to this repository.
 - Prefer explicit renderer errors over silent procedural fallback when the user disables fallback or expects asset-backed rendering.
 - Do not reintroduce generated web bindings, desktop schema files, or unrelated frontend tooling. The visualizer is a static generated HTML output from the Python generator.
 - Do not start or leave a frontend dev server running. This project should not claim frontend ports as part of normal work.
+- Anonymous slot/event modeling is the primary model direction. Fixed-source classifier workflows may remain useful as legacy baselines or benchmarks, but do not document or extend them as the main product direction unless the user asks.

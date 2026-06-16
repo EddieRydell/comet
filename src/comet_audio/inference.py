@@ -16,6 +16,7 @@ from comet_audio.training import (
     HOP_LENGTH,
     SAMPLE_RATE,
     SLOT_BOUNDARY_NAMES,
+    SLOT_PHASE_NAMES,
     SlotAttentionEventModel,
     decode_onsets,
     load_trained_model,
@@ -116,9 +117,10 @@ def predict_anonymous_slots(
     if checkpoint.get("target") != "anonymous_slots_v1":
         raise ValueError(f"{run_dir} is not an anonymous_slots_v1 checkpoint")
     architecture = checkpoint.get("architecture")
-    if architecture != "slot_attention_event_v1":
+    if architecture != "slot_attention_phase_event_v1":
         raise ValueError(
-            f"{run_dir} uses architecture {architecture!r}; expected 'slot_attention_event_v1'"
+            f"{run_dir} uses architecture {architecture!r}; "
+            "expected 'slot_attention_phase_event_v1'"
         )
     max_tracks = int(checkpoint.get("max_tracks") or 16)
     model = SlotAttentionEventModel(max_tracks=max_tracks).to(device)
@@ -132,8 +134,12 @@ def predict_anonymous_slots(
 
     probabilities = {
         name: torch.sigmoid(predictions[name][0]).cpu()
-        for name in ("slot_active", *SLOT_BOUNDARY_NAMES)
+        for name in (*SLOT_PHASE_NAMES, *SLOT_BOUNDARY_NAMES)
     }
+    probabilities["slot_active"] = torch.stack(
+        [probabilities[name] for name in SLOT_PHASE_NAMES],
+        dim=1,
+    ).amax(dim=1)
     activity = torch.sigmoid(predictions["slot_activity"][0]).cpu()
     frame_seconds = HOP_LENGTH / SAMPLE_RATE
     min_frames = max(0, int(round(min_segment_seconds / frame_seconds)))
@@ -161,7 +167,7 @@ def predict_anonymous_slots(
         "model": {
             "run_dir": str(run_dir),
             "target": "anonymous_slots_v1",
-            "architecture": "slot_attention_event_v1",
+            "architecture": "slot_attention_phase_event_v1",
             "max_tracks": max_tracks,
             "hop_length": HOP_LENGTH,
             "frame_seconds": frame_seconds,
@@ -187,13 +193,18 @@ def _decoded_slot_payload(
     min_frames: int,
 ) -> dict[str, Any]:
     slot_probabilities = {
-        name: probabilities[name][slot_index] for name in ("slot_active", *SLOT_BOUNDARY_NAMES)
+        name: probabilities[name][slot_index]
+        for name in ("slot_active", *SLOT_PHASE_NAMES, *SLOT_BOUNDARY_NAMES)
     }
     events = decode_slot_events(slot_probabilities, frame_seconds, duration, min_frames=min_frames)
     return {
         "slot": f"track_{slot_index:02d}",
         "activity_probability": float(activity[slot_index]),
         "raw_event_count": len(events),
+        "phase_probabilities": {
+            name.replace("slot_", ""): [float(value) for value in slot_probabilities[name]]
+            for name in SLOT_PHASE_NAMES
+        },
         "boundary_probabilities": {
             name.replace("slot_", ""): [float(value) for value in slot_probabilities[name]]
             for name in SLOT_BOUNDARY_NAMES
@@ -210,26 +221,63 @@ def decode_slot_events(
     threshold: float = 0.35,
     min_frames: int = 1,
 ) -> list[dict[str, Any]]:
-    onset_peaks = _boundary_peaks(probabilities["slot_onset"], threshold=threshold)
-    offset_peaks = _boundary_peaks(probabilities["slot_offset"], threshold=threshold)
-    attack_peaks = _boundary_peaks(probabilities["slot_attack_end"], threshold=0.25)
-    release_peaks = _boundary_peaks(probabilities["slot_release_start"], threshold=0.25)
-    used_offsets: set[int] = set()
+    phase_stack = torch.stack([probabilities[name] for name in SLOT_PHASE_NAMES], dim=0)
+    phase_active = phase_stack.amax(dim=0)
+    active = phase_active >= threshold
     events: list[dict[str, Any]] = []
-    for onset in onset_peaks:
-        offset = next(
-            (peak for peak in offset_peaks if peak > onset and peak not in used_offsets),
-            None,
-        )
-        if offset is None or offset - onset < min_frames:
+    start: int | None = None
+    spans: list[tuple[int, int]] = []
+    for index, is_active in enumerate(active.tolist()):
+        if is_active and start is None:
+            start = index
+        elif not is_active and start is not None:
+            spans.append((start, index))
+            start = None
+    if start is not None:
+        spans.append((start, int(active.numel())))
+
+    for span_start, span_stop in spans:
+        if span_stop - span_start < min_frames:
             continue
-        used_offsets.add(offset)
-        attack_end = _best_inner_peak(attack_peaks, probabilities["slot_attack_end"], onset, offset)
-        release_start = _best_inner_peak(
-            release_peaks,
-            probabilities["slot_release_start"],
-            attack_end,
+        onset = _best_local_boundary(
+            probabilities["slot_onset"],
+            center=span_start,
+            start=max(0, span_start - 3),
+            stop=min(int(active.numel()) - 1, span_start + 3),
+        )
+        offset = _best_local_boundary(
+            probabilities["slot_offset"],
+            center=span_stop,
+            start=max(onset + 1, span_stop - 3),
+            stop=min(int(active.numel()) - 1, span_stop + 3),
+        )
+        if offset <= onset or offset - onset < min_frames:
+            continue
+        attack_transition = _first_phase_transition(
+            probabilities["slot_attack"],
+            probabilities["slot_held"],
+            onset,
             offset,
+            default=span_start,
+        )
+        release_transition = _first_phase_transition(
+            torch.maximum(probabilities["slot_attack"], probabilities["slot_held"]),
+            probabilities["slot_release"],
+            onset,
+            offset,
+            default=offset,
+        )
+        attack_end = _best_local_boundary(
+            probabilities["slot_attack_end"],
+            center=attack_transition,
+            start=onset,
+            stop=offset,
+        )
+        release_start = _best_local_boundary(
+            probabilities["slot_release_start"],
+            center=release_transition,
+            start=attack_end,
+            stop=offset,
         )
         attack_end = max(onset, min(attack_end, offset))
         release_start = max(attack_end, min(release_start, offset))
@@ -261,6 +309,35 @@ def decode_slot_events(
             }
         )
     return events
+
+
+def _best_local_boundary(
+    probability: torch.Tensor,
+    center: int,
+    start: int,
+    stop: int,
+) -> int:
+    if probability.numel() == 0:
+        return center
+    start = max(0, min(start, int(probability.numel()) - 1))
+    stop = max(start, min(stop, int(probability.numel()) - 1))
+    window = probability[start : stop + 1]
+    if window.numel() == 0:
+        return max(0, min(center, int(probability.numel()) - 1))
+    return start + int(torch.argmax(window).item())
+
+
+def _first_phase_transition(
+    before: torch.Tensor,
+    after: torch.Tensor,
+    start: int,
+    stop: int,
+    default: int,
+) -> int:
+    for index in range(start, stop + 1):
+        if float(after[index]) >= float(before[index]):
+            return index
+    return default
 
 
 def _boundary_peaks(

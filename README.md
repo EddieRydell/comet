@@ -1,8 +1,28 @@
 # Comet Audio
 
-Comet Audio is a synthetic EDM dataset generator. It creates short labeled clips for onset and event-oriented research: a final mono mix WAV, wet mono per-source stems, metadata JSON, and a batch manifest.
+Comet Audio is a local research workbench for synthetic EDM/audio event data. It includes a generator, repo-local asset catalog, training and inference commands, evaluation helpers, and a static browser viewer for generated metadata and model predictions.
 
-Version 1 keeps the same training-friendly mono layout while adding an asset-backed renderer layer for WAV one-shots, simple SFZ instruments, and DawDreamer-hosted synth presets captured from real plugin GUIs.
+The main modeling direction is anonymous slot/event prediction: each model slot represents one coherent source the model thinks it heard, with attack, held, and release regions for that source. Older fixed-source classifier workflows can still be useful as baselines, but they are not the primary target.
+
+Version 1 keeps a training-friendly mono layout while adding an asset-backed renderer layer for WAV one-shots, simple SFZ instruments, and DawDreamer-hosted synth presets captured from real plugin GUIs.
+
+## Repo Layout
+
+- `src/comet_audio/`: package source, CLI entry points, generator, asset tooling, training, inference, and the canonical static visualizer at `src/comet_audio/comet_visualizer.html`.
+- `tests/`: test suite for tracked source behavior.
+- `assets/library/catalog.json`: canonical metadata for repo-local assets. Local samples, imports, downloads, auditions, and test songs under `assets/library/` are ignored.
+- `data/`: generated datasets, previews, predictions, comparison batches, and evaluation snapshots. This is local output, not tracked source.
+- `runs/`: local training runs, checkpoints, metrics, and model outputs. Keep meaningful current runs locally; do not commit them unless explicitly requested.
+- `tools/`: local plugin installers or binaries such as Surge XT assets. These are ignored machine-local dependencies.
+- `.venv/`, caches, IDE files, and generated audio/checkpoint files are local artifacts.
+
+## Artifact Retention
+
+Keep intentional catalog metadata, preset state needed by catalog entries, useful imported sample libraries, `data/generated/best_so_far_eval`, and active or meaningful training runs.
+
+Delete or archive stale preview folders, one-off listening/comparison outputs, generated visualizer copies, smoke/bench runs that are no longer baselines, and Python/tool caches such as `.pytest_cache`, `.ruff_cache`, and `__pycache__`.
+
+Do not delete `.venv`, `uv.lock`, large sample libraries, generated datasets, checkpoints, or run artifacts as part of routine cleanup unless that cleanup is explicitly requested or the artifact is clearly disposable.
 
 ## Setup
 

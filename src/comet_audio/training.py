@@ -29,17 +29,25 @@ DEFAULT_EPOCHS = 40
 DEFAULT_BATCH_SIZE = 16
 SOURCE_TYPE_TO_INDEX = {source_type: index for index, source_type in enumerate(SOURCE_TYPES)}
 TrainingTarget = Literal["source_types_v1", "anonymous_slots_v1"]
-SLOT_ACTIVE_LOSS_WEIGHT = 1.0
-SLOT_ACTIVE_TVERSKY_LOSS_WEIGHT = 0.6
-SLOT_BOUNDARY_LOSS_WEIGHT = 0.8
-SLOT_EVENT_COUNT_LOSS_WEIGHT = 0.05
-SLOT_UNMATCHED_OFF_LOSS_WEIGHT = 1.0
-SLOT_DUPLICATE_LOSS_WEIGHT = 0.05
+SLOT_PHASE_LOSS_WEIGHT = 1.0
+SLOT_ACTIVE_TVERSKY_LOSS_WEIGHT = 0.5
+SLOT_BOUNDARY_LOSS_WEIGHT = 0.35
+SLOT_EVENT_COUNT_LOSS_WEIGHT = 0.15
+SLOT_PHASE_OVERLAP_LOSS_WEIGHT = 0.10
+SLOT_UNMATCHED_OFF_LOSS_WEIGHT = 0.75
+SLOT_DUPLICATE_LOSS_WEIGHT = 0.25
 SLOT_ACTIVITY_LOSS_WEIGHT = 0.05
 SLOT_TVERSKY_FALSE_POSITIVE_WEIGHT = 0.7
 SLOT_TVERSKY_FALSE_NEGATIVE_WEIGHT = 0.3
 SLOT_DUPLICATE_SIMILARITY_THRESHOLD = 0.85
+SLOT_PHASE_NAMES = ("slot_attack", "slot_held", "slot_release")
 SLOT_BOUNDARY_NAMES = ("slot_onset", "slot_attack_end", "slot_release_start", "slot_offset")
+SLOT_BOUNDARY_WEIGHTS = {
+    "slot_onset": 1.0,
+    "slot_attack_end": 0.5,
+    "slot_release_start": 1.25,
+    "slot_offset": 1.5,
+}
 
 SplitName = Literal["train", "val", "test"]
 
@@ -316,7 +324,9 @@ def build_anonymous_slot_targets(
     frame_times = crop_start_seconds + torch.arange(num_frames, dtype=torch.float32) * (
         hop_length / sample_rate
     )
-    slot_active = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
+    slot_attack = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
+    slot_held = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
+    slot_release = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
     slot_onset = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
     slot_attack_end = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
     slot_release_start = torch.zeros(max_tracks, num_frames, dtype=torch.float32)
@@ -334,17 +344,21 @@ def build_anonymous_slot_targets(
         offset = float(event.offset_seconds)
         attack_end = min(offset, onset + float(event.attack_seconds))
         release_start = max(attack_end, offset - float(event.release_seconds))
-        active_start, active_stop = _frame_slice(
-            onset,
-            offset,
-            crop_start_seconds,
-            num_frames,
-            sample_rate,
-            hop_length,
-            include_stop=True,
-        )
-        if active_start < active_stop:
-            slot_active[slot_index, active_start:active_stop] = 1.0
+        for phase_target, phase_start, phase_stop in (
+            (slot_attack, onset, attack_end),
+            (slot_held, attack_end, release_start),
+            (slot_release, release_start, offset),
+        ):
+            start_frame, stop_frame = _frame_slice(
+                phase_start,
+                phase_stop,
+                crop_start_seconds,
+                num_frames,
+                sample_rate,
+                hop_length,
+            )
+            if start_frame < stop_frame:
+                phase_target[slot_index, start_frame:stop_frame] = 1.0
         for target, boundary_seconds in (
             (slot_onset, onset),
             (slot_attack_end, attack_end),
@@ -354,14 +368,23 @@ def build_anonymous_slot_targets(
             distance = torch.abs(frame_times - boundary_seconds)
             gaussian = torch.exp(-0.5 * (distance / mark_sigma_seconds) ** 2)
             target[slot_index] = torch.maximum(target[slot_index], gaussian)
+    slot_active = torch.stack((slot_attack, slot_held, slot_release), dim=0).amax(dim=0)
+    slot_boundary_activity = torch.stack(
+        (slot_onset, slot_attack_end, slot_release_start, slot_offset), dim=0
+    ).amax(dim=0)
     return {
+        "slot_attack": slot_attack.clamp(0.0, 1.0),
+        "slot_held": slot_held.clamp(0.0, 1.0),
+        "slot_release": slot_release.clamp(0.0, 1.0),
         "slot_active": slot_active.clamp(0.0, 1.0),
         "slot_onset": slot_onset.clamp(0.0, 1.0),
         "slot_attack_end": slot_attack_end.clamp(0.0, 1.0),
         "slot_release_start": slot_release_start.clamp(0.0, 1.0),
         "slot_offset": slot_offset.clamp(0.0, 1.0),
         "slot_mask": slot_mask,
-        "slot_activity": slot_active.amax(dim=-1).clamp(0.0, 1.0),
+        "slot_activity": torch.maximum(slot_active, slot_boundary_activity)
+        .amax(dim=-1)
+        .clamp(0.0, 1.0),
     }
 
 
@@ -501,7 +524,7 @@ class SlotAttentionEventModel(nn.Module):
             nn.LayerNorm(slot_dim),
             nn.Linear(slot_dim, slot_dim),
             nn.SiLU(),
-            nn.Linear(slot_dim, 5),
+            nn.Linear(slot_dim, 7),
         )
         self.slot_activity_head = nn.Sequential(
             nn.LayerNorm(slot_dim),
@@ -538,12 +561,18 @@ class SlotAttentionEventModel(nn.Module):
             slots = slots + self.slot_mlp(slots)
         slot_time_features = self.feature_norm(features[:, None] + slots[:, :, None])
         logits = self.slot_time_head(slot_time_features).permute(0, 1, 3, 2).contiguous()
+        phase_probability = torch.stack(
+            [torch.sigmoid(logits[:, :, index]) for index in range(3)], dim=2
+        ).amax(dim=2)
         return {
-            "slot_active": logits[:, :, 0],
-            "slot_onset": logits[:, :, 1],
-            "slot_attack_end": logits[:, :, 2],
-            "slot_release_start": logits[:, :, 3],
-            "slot_offset": logits[:, :, 4],
+            "slot_attack": logits[:, :, 0],
+            "slot_held": logits[:, :, 1],
+            "slot_release": logits[:, :, 2],
+            "slot_onset": logits[:, :, 3],
+            "slot_attack_end": logits[:, :, 4],
+            "slot_release_start": logits[:, :, 5],
+            "slot_offset": logits[:, :, 6],
+            "slot_active": phase_probability,
             "slot_activity": self.slot_activity_head(slots).squeeze(-1),
         }
 
@@ -630,7 +659,7 @@ def compute_anonymous_slot_loss(
     batch: dict[str, Tensor],
     detach_metrics: bool = True,
 ) -> tuple[Tensor, dict[str, float] | dict[str, Tensor]]:
-    time = min(predictions["slot_active"].shape[-1], batch["slot_active"].shape[-1])
+    time = min(predictions["slot_attack"].shape[-1], batch["slot_attack"].shape[-1])
     pred = {
         key: value[..., :time] if value.ndim >= 3 else value for key, value in predictions.items()
     }
@@ -639,6 +668,9 @@ def compute_anonymous_slot_loss(
         for key, value in batch.items()
         if key
         in {
+            "slot_attack",
+            "slot_held",
+            "slot_release",
             "slot_active",
             "slot_onset",
             "slot_attack_end",
@@ -647,6 +679,12 @@ def compute_anonymous_slot_loss(
             "slot_activity",
         }
     }
+    for name in (*SLOT_PHASE_NAMES, *SLOT_BOUNDARY_NAMES, "slot_activity"):
+        _require_finite_tensor(f"predictions[{name!r}]", pred[name])
+        _require_finite_tensor(f"batch[{name!r}]", target[name])
+    target["slot_active"] = _target_phase_active(target)
+    pred_active_probability = _phase_active_probability(pred)
+    _require_finite_tensor("predicted slot phase-active probability", pred_active_probability)
     assignments = _slot_assignments(pred, target)
     matched_batch_indices: list[int] = []
     matched_pred_indices: list[int] = []
@@ -663,28 +701,25 @@ def compute_anonymous_slot_loss(
             activity_targets[batch_index, pred_index] = 1.0
         unmatched = [
             index
-            for index in range(pred["slot_active"].shape[1])
+            for index in range(pred["slot_attack"].shape[1])
             if index not in set(batch_matched_pred_indices)
         ]
         unmatched_batch_indices.extend([batch_index] * len(unmatched))
         unmatched_pred_indices.extend(unmatched)
-    zero = pred["slot_active"].sum() * 0.0
-    active_logits = pred["slot_active"]
+    zero = pred["slot_attack"].sum() * 0.0
     if matched_batch_indices:
-        batch_indices = torch.as_tensor(matched_batch_indices, device=pred["slot_active"].device)
-        pred_indices = torch.as_tensor(matched_pred_indices, device=pred["slot_active"].device)
-        target_indices = torch.as_tensor(matched_target_indices, device=pred["slot_active"].device)
-        matched_active_logits = active_logits[batch_indices, pred_indices]
+        batch_indices = torch.as_tensor(matched_batch_indices, device=pred["slot_attack"].device)
+        pred_indices = torch.as_tensor(matched_pred_indices, device=pred["slot_attack"].device)
+        target_indices = torch.as_tensor(matched_target_indices, device=pred["slot_attack"].device)
         matched_active_targets = target["slot_active"][batch_indices, target_indices].float()
-        slot_active_loss = torch.nn.functional.binary_cross_entropy_with_logits(
-            matched_active_logits,
-            matched_active_targets,
+        slot_phase_loss = _slot_phase_loss(
+            pred, target, batch_indices, pred_indices, target_indices
         )
         slot_active_tversky_loss = _active_tversky_loss(
-            torch.sigmoid(matched_active_logits),
+            pred_active_probability[batch_indices, pred_indices],
             matched_active_targets,
         )
-        boundary_loss = _slot_boundary_loss(
+        slot_boundary_loss = _slot_boundary_loss(
             pred,
             target,
             batch_indices,
@@ -699,23 +734,26 @@ def compute_anonymous_slot_loss(
             target_indices,
         )
     else:
-        slot_active_loss = zero
+        slot_phase_loss = zero
         slot_active_tversky_loss = zero
-        boundary_loss = zero
+        slot_boundary_loss = zero
         event_count_loss = zero
     if unmatched_batch_indices:
-        batch_indices = torch.as_tensor(unmatched_batch_indices, device=pred["slot_active"].device)
-        pred_indices = torch.as_tensor(unmatched_pred_indices, device=pred["slot_active"].device)
+        batch_indices = torch.as_tensor(unmatched_batch_indices, device=pred["slot_attack"].device)
+        pred_indices = torch.as_tensor(unmatched_pred_indices, device=pred["slot_attack"].device)
         off_targets = torch.zeros(
             len(unmatched_pred_indices),
             time,
-            dtype=active_logits.dtype,
-            device=pred["slot_active"].device,
+            dtype=pred["slot_attack"].dtype,
+            device=pred["slot_attack"].device,
         )
-        unmatched_active_loss = torch.nn.functional.binary_cross_entropy_with_logits(
-            active_logits[batch_indices, pred_indices],
-            off_targets,
-        )
+        unmatched_phase_losses = [
+            torch.nn.functional.binary_cross_entropy_with_logits(
+                pred[name][batch_indices, pred_indices],
+                off_targets,
+            )
+            for name in SLOT_PHASE_NAMES
+        ]
         unmatched_boundary_losses = [
             torch.nn.functional.binary_cross_entropy_with_logits(
                 pred[name][batch_indices, pred_indices],
@@ -723,34 +761,43 @@ def compute_anonymous_slot_loss(
             )
             for name in SLOT_BOUNDARY_NAMES
         ]
-        unmatched_off_loss = unmatched_active_loss + torch.stack(unmatched_boundary_losses).mean()
+        unmatched_off_loss = torch.stack(
+            [*unmatched_phase_losses, *unmatched_boundary_losses]
+        ).mean()
     else:
         unmatched_off_loss = zero
-    boundary_probability = torch.stack(
-        [torch.sigmoid(pred[name]) for name in SLOT_BOUNDARY_NAMES], dim=2
-    ).amax(dim=2)
+    slot_phase_overlap_loss = _slot_phase_overlap_loss(pred)
     duplicate_loss = _slot_duplicate_loss(
-        torch.maximum(torch.sigmoid(active_logits), boundary_probability)
+        torch.cat(
+            (
+                torch.stack([torch.sigmoid(pred[name]) for name in SLOT_PHASE_NAMES], dim=2),
+                torch.stack([torch.sigmoid(pred[name]) for name in SLOT_BOUNDARY_NAMES], dim=2),
+            ),
+            dim=2,
+        )
     )
     activity_loss = torch.nn.functional.binary_cross_entropy_with_logits(
         pred["slot_activity"],
         activity_targets,
     )
     total = (
-        SLOT_ACTIVE_LOSS_WEIGHT * slot_active_loss
+        SLOT_PHASE_LOSS_WEIGHT * slot_phase_loss
         + SLOT_ACTIVE_TVERSKY_LOSS_WEIGHT * slot_active_tversky_loss
-        + SLOT_BOUNDARY_LOSS_WEIGHT * boundary_loss
+        + SLOT_BOUNDARY_LOSS_WEIGHT * slot_boundary_loss
         + SLOT_EVENT_COUNT_LOSS_WEIGHT * event_count_loss
+        + SLOT_PHASE_OVERLAP_LOSS_WEIGHT * slot_phase_overlap_loss
         + SLOT_UNMATCHED_OFF_LOSS_WEIGHT * unmatched_off_loss
         + SLOT_DUPLICATE_LOSS_WEIGHT * duplicate_loss
         + SLOT_ACTIVITY_LOSS_WEIGHT * activity_loss
     )
+    _require_finite_tensor("anonymous slot loss", total)
     metrics = {
         "loss": total.detach(),
-        "slot_active_loss": slot_active_loss.detach(),
+        "slot_phase_loss": slot_phase_loss.detach(),
         "slot_active_tversky_loss": slot_active_tversky_loss.detach(),
-        "slot_boundary_loss": boundary_loss.detach(),
+        "slot_boundary_loss": slot_boundary_loss.detach(),
         "slot_event_count_loss": event_count_loss.detach(),
+        "slot_phase_overlap_loss": slot_phase_overlap_loss.detach(),
         "slot_unmatched_off_loss": unmatched_off_loss.detach(),
         "slot_duplicate_loss": duplicate_loss.detach(),
         "slot_activity_loss": activity_loss.detach(),
@@ -758,6 +805,45 @@ def compute_anonymous_slot_loss(
     if detach_metrics:
         return total, {key: float(value.cpu()) for key, value in metrics.items()}
     return total, metrics
+
+
+def _require_finite_tensor(name: str, value: Tensor) -> None:
+    if not bool(torch.isfinite(value).all()):
+        raise RuntimeError(f"Non-finite tensor encountered in {name}")
+
+
+def _target_phase_active(targets: dict[str, Tensor]) -> Tensor:
+    return torch.stack([targets[name].float() for name in SLOT_PHASE_NAMES], dim=2).amax(dim=2)
+
+
+def _phase_active_probability(predictions: dict[str, Tensor]) -> Tensor:
+    return torch.stack([torch.sigmoid(predictions[name]) for name in SLOT_PHASE_NAMES], dim=2).amax(
+        dim=2
+    )
+
+
+def _soft_dice_loss(probability: Tensor, target: Tensor) -> Tensor:
+    intersection = (probability * target).sum(dim=-1)
+    denominator = probability.sum(dim=-1) + target.sum(dim=-1) + 1e-6
+    return (1.0 - (2.0 * intersection + 1e-6) / denominator).mean()
+
+
+def _slot_phase_loss(
+    predictions: dict[str, Tensor],
+    targets: dict[str, Tensor],
+    batch_indices: Tensor,
+    pred_indices: Tensor,
+    target_indices: Tensor,
+) -> Tensor:
+    losses = []
+    for name in SLOT_PHASE_NAMES:
+        logits = predictions[name][batch_indices, pred_indices]
+        target = targets[name][batch_indices, target_indices].float()
+        losses.append(
+            focal_bce_with_logits(logits, target, gamma=2.0)
+            + _soft_dice_loss(torch.sigmoid(logits), target)
+        )
+    return torch.stack(losses).mean()
 
 
 def _active_tversky_loss(active_probability: Tensor, active_targets: Tensor) -> Tensor:
@@ -781,16 +867,21 @@ def _slot_boundary_loss(
     target_indices: Tensor,
 ) -> Tensor:
     losses = []
+    weights = []
     for name in SLOT_BOUNDARY_NAMES:
         logits = predictions[name][batch_indices, pred_indices]
         target = targets[name][batch_indices, target_indices].float()
         focal = focal_bce_with_logits(logits, target, gamma=2.0)
-        probability = torch.sigmoid(logits)
-        intersection = (probability * target).sum(dim=-1)
-        denominator = probability.sum(dim=-1) + target.sum(dim=-1) + 1e-6
-        dice = 1.0 - (2.0 * intersection + 1e-6) / denominator
-        losses.append(focal + dice.mean())
-    return torch.stack(losses).mean()
+        losses.append(focal + _soft_dice_loss(torch.sigmoid(logits), target))
+        weights.append(
+            torch.as_tensor(
+                SLOT_BOUNDARY_WEIGHTS[name],
+                dtype=logits.dtype,
+                device=logits.device,
+            )
+        )
+    weight_tensor = torch.stack(weights)
+    return (torch.stack(losses) * weight_tensor).sum() / weight_tensor.sum()
 
 
 def _slot_event_count_loss(
@@ -810,13 +901,22 @@ def _slot_event_count_loss(
     return torch.stack(losses).mean()
 
 
-def _slot_duplicate_loss(active_probability: Tensor) -> Tensor:
-    batch_size, slot_count, _time = active_probability.shape
+def _slot_phase_overlap_loss(predictions: dict[str, Tensor]) -> Tensor:
+    probabilities = [torch.sigmoid(predictions[name]) for name in SLOT_PHASE_NAMES]
+    return (
+        probabilities[0] * probabilities[1]
+        + probabilities[0] * probabilities[2]
+        + probabilities[1] * probabilities[2]
+    ).mean()
+
+
+def _slot_duplicate_loss(slot_tracks: Tensor) -> Tensor:
+    batch_size, slot_count, _channels, _time = slot_tracks.shape
     if slot_count < 2:
-        return active_probability.sum() * 0.0
+        return slot_tracks.sum() * 0.0
     losses: list[Tensor] = []
     for batch_index in range(batch_size):
-        masks = active_probability[batch_index]
+        masks = slot_tracks[batch_index].flatten(start_dim=1)
         intersection = torch.minimum(masks[:, None], masks[None]).sum(dim=-1)
         union = torch.maximum(masks[:, None], masks[None]).sum(dim=-1).clamp_min(1e-6)
         similarity = intersection / union
@@ -832,22 +932,28 @@ def _slot_duplicate_loss(active_probability: Tensor) -> Tensor:
         if pair_penalty.numel() > 0:
             losses.append(pair_penalty.mean())
     if not losses:
-        return active_probability.sum() * 0.0
+        return slot_tracks.sum() * 0.0
     return torch.stack(losses).mean()
 
 
 def _slot_assignments(
     predictions: dict[str, Tensor], targets: dict[str, Tensor]
 ) -> list[list[tuple[int, int]]]:
-    batch_size, slot_count, _time = predictions["slot_active"].shape
+    batch_size, slot_count, _time = predictions["slot_attack"].shape
     rows: list[list[tuple[int, int]]] = []
     with torch.no_grad():
-        pred_active_logits = predictions["slot_active"].float().detach().cpu()
-        pred_active = torch.sigmoid(pred_active_logits)
+        pred_active = _phase_active_probability(predictions).float().detach().cpu()
         target_active = targets["slot_active"].detach().cpu().float()
-        target_activity = target_active.any(dim=-1).float()
+        target_activity = targets["slot_activity"].detach().cpu().float()
+        pred_phases = {
+            name: torch.sigmoid(predictions[name]).float().detach().cpu()
+            for name in SLOT_PHASE_NAMES
+        }
+        target_phases = {name: targets[name].detach().cpu().float() for name in SLOT_PHASE_NAMES}
+        pred_activity = torch.sigmoid(predictions["slot_activity"]).float().detach().cpu()
         pred_boundaries = {
-            name: predictions[name].float().detach().cpu() for name in SLOT_BOUNDARY_NAMES
+            name: torch.sigmoid(predictions[name]).float().detach().cpu()
+            for name in SLOT_BOUNDARY_NAMES
         }
         target_boundaries = {
             name: targets[name].detach().cpu().float() for name in SLOT_BOUNDARY_NAMES
@@ -862,39 +968,39 @@ def _slot_assignments(
                 rows.append([])
                 continue
             true_active = target_active[batch_index, active_targets]
-            active_logits = pred_active_logits[batch_index]
             active_probability = pred_active[batch_index]
-            active_bce = torch.nn.functional.binary_cross_entropy_with_logits(
-                active_logits[:, None].expand(-1, len(active_targets), -1),
-                true_active[None].expand(slot_count, -1, -1),
-                reduction="none",
-            ).mean(dim=-1)
-            true_positive = active_probability @ true_active.transpose(0, 1)
-            false_positive = active_probability @ (1.0 - true_active).transpose(0, 1)
-            false_negative = (1.0 - active_probability) @ true_active.transpose(0, 1)
-            tversky = 1.0 - (true_positive + 1e-6) / (
-                true_positive
-                + SLOT_TVERSKY_FALSE_POSITIVE_WEIGHT * false_positive
-                + SLOT_TVERSKY_FALSE_NEGATIVE_WEIGHT * false_negative
-                + 1e-6
+            phase_active_cost = _pairwise_dice_cost(active_probability, true_active)
+            per_phase_cost = torch.zeros(
+                slot_count, len(active_targets), dtype=active_probability.dtype
             )
-            intersection = active_probability @ true_active.transpose(0, 1)
-            dice = 1.0 - (2.0 * intersection + 1e-6) / (
-                active_probability.sum(dim=-1, keepdim=True) + true_active.sum(dim=-1)[None] + 1e-6
-            )
+            for name in SLOT_PHASE_NAMES:
+                per_phase_cost += _pairwise_dice_cost(
+                    pred_phases[name][batch_index],
+                    target_phases[name][batch_index, active_targets],
+                )
+            per_phase_cost = per_phase_cost / len(SLOT_PHASE_NAMES)
             boundary_cost = torch.zeros(
                 slot_count, len(active_targets), dtype=active_probability.dtype
             )
+            boundary_weight_total = sum(SLOT_BOUNDARY_WEIGHTS.values())
             for name in SLOT_BOUNDARY_NAMES:
-                logits = pred_boundaries[name][batch_index]
                 labels = target_boundaries[name][batch_index, active_targets]
-                boundary_cost += torch.nn.functional.binary_cross_entropy_with_logits(
-                    logits[:, None].expand(-1, len(active_targets), -1),
-                    labels[None].expand(slot_count, -1, -1),
-                    reduction="none",
-                ).mean(dim=-1)
-            boundary_cost = boundary_cost / len(SLOT_BOUNDARY_NAMES)
-            cost = active_bce + 0.6 * tversky + 0.4 * dice + 0.4 * boundary_cost
+                boundary_cost += SLOT_BOUNDARY_WEIGHTS[name] * _pairwise_dice_cost(
+                    pred_boundaries[name][batch_index],
+                    labels,
+                )
+            boundary_cost = boundary_cost / boundary_weight_total
+            activity_cost = (1.0 - pred_activity[batch_index])[:, None].expand(
+                -1,
+                len(active_targets),
+            )
+            cost = (
+                0.35 * phase_active_cost
+                + 0.35 * per_phase_cost
+                + 0.20 * boundary_cost
+                + 0.10 * activity_cost
+            ).clamp(0.0, 10.0)
+            _require_finite_tensor("anonymous slot assignment cost", cost)
             pred_indices, target_columns = linear_sum_assignment(cost.numpy())
             rows.append(
                 [
@@ -905,6 +1011,12 @@ def _slot_assignments(
                 ]
             )
     return rows
+
+
+def _pairwise_dice_cost(prediction: Tensor, target: Tensor) -> Tensor:
+    intersection = prediction @ target.transpose(0, 1)
+    denominator = prediction.sum(dim=-1, keepdim=True) + target.sum(dim=-1)[None] + 1e-6
+    return (1.0 - (2.0 * intersection + 1e-6) / denominator).clamp(0.0, 1.0)
 
 
 def train_model(
@@ -981,7 +1093,7 @@ def train_model(
             "epoch": epoch,
             "target": target,
             "architecture": (
-                "slot_attention_event_v1" if target == "anonymous_slots_v1" else "cnn_tcn_v1"
+                "slot_attention_phase_event_v1" if target == "anonymous_slots_v1" else "cnn_tcn_v1"
             ),
             "source_types": [] if target == "anonymous_slots_v1" else SOURCE_TYPES,
             "max_tracks": max_tracks if target == "anonymous_slots_v1" else None,
@@ -1030,8 +1142,13 @@ def _run_epoch(
             else:
                 loss, metrics = compute_loss(predictions, batch, detach_metrics=False)
         if training:
+            _require_finite_tensor("training loss", loss)
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
+            if target == "anonymous_slots_v1":
+                scaler.unscale_(optimizer)
+                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                _require_finite_tensor("anonymous slot gradient norm", grad_norm)
             scaler.step(optimizer)
             scaler.update()
         batch_size = int(batch["waveform"].shape[0])

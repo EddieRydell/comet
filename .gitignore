@@ -1,3 +1,4 @@
+# Local Python environment and caches.
 .venv/
 __pycache__/
 *.py[cod]
@@ -7,8 +8,10 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Local editor state.
 .idea/
 
+# Generated datasets, previews, predictions, runs, and audio outputs.
 data/
 runs/
 *.wav
@@ -17,11 +20,12 @@ runs/
 *.mp3
 preview.html
 
-# Large local asset-library artifacts.
+# Large local asset-library artifacts. Keep assets/library/catalog.json tracked.
 assets/library/downloads/
 assets/library/samples/
 assets/library/imports/
 assets/library/auditions/
+assets/library/test_songs/
 *.zip
 *.7z
 *.rar
