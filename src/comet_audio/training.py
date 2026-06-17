@@ -35,15 +35,17 @@ SLOT_BOUNDARY_LOSS_WEIGHT = 0.35
 SLOT_EVENT_COUNT_LOSS_WEIGHT = 0.0
 SLOT_PHASE_OVERLAP_LOSS_WEIGHT = 0.10
 SLOT_UNMATCHED_OFF_LOSS_WEIGHT = 0.75
-SLOT_DUPLICATE_LOSS_WEIGHT = 0.75
+SLOT_DUPLICATE_LOSS_WEIGHT = 0.5
 SLOT_ACTIVITY_LOSS_WEIGHT = 0.05
-SLOT_MATCHED_OFF_LOSS_WEIGHT = 1.5
-SLOT_ACTIVE_DURATION_LOSS_WEIGHT = 0.75
-SLOT_BOUNDARY_MASS_LOSS_WEIGHT = 0.25
+SLOT_MATCHED_OFF_LOSS_WEIGHT = 0.8
+SLOT_ACTIVE_DURATION_LOSS_WEIGHT = 1.0
+SLOT_BOUNDARY_MASS_LOSS_WEIGHT = 0.1
+SLOT_DURATION_UNDERACTIVE_WEIGHT = 2.0
+SLOT_DURATION_OVERACTIVE_WEIGHT = 0.5
 SLOT_TVERSKY_FALSE_POSITIVE_WEIGHT = 0.7
 SLOT_TVERSKY_FALSE_NEGATIVE_WEIGHT = 0.3
 SLOT_DUPLICATE_SIMILARITY_THRESHOLD = 0.6
-ANONYMOUS_SLOT_OBJECTIVE_VERSION = "phase_event_stable_v3"
+ANONYMOUS_SLOT_OBJECTIVE_VERSION = "phase_event_stable_v4"
 SLOT_PHASE_NAMES = ("slot_attack", "slot_held", "slot_release")
 SLOT_BOUNDARY_NAMES = ("slot_onset", "slot_attack_end", "slot_release_start", "slot_offset")
 SLOT_BOUNDARY_WEIGHTS = {
@@ -904,7 +906,15 @@ def _matched_slot_off_loss(active_probability: Tensor, active_targets: Tensor) -
 def _active_duration_ratio_loss(active_probability: Tensor, active_targets: Tensor) -> Tensor:
     predicted_duration = active_probability.mean(dim=-1)
     target_duration = active_targets.float().mean(dim=-1)
-    return torch.nn.functional.smooth_l1_loss(predicted_duration, target_duration)
+    underactive = torch.relu(target_duration - predicted_duration)
+    overactive = torch.relu(predicted_duration - target_duration)
+    return SLOT_DURATION_UNDERACTIVE_WEIGHT * torch.nn.functional.smooth_l1_loss(
+        underactive,
+        torch.zeros_like(underactive),
+    ) + SLOT_DURATION_OVERACTIVE_WEIGHT * torch.nn.functional.smooth_l1_loss(
+        overactive,
+        torch.zeros_like(overactive),
+    )
 
 
 def _slot_boundary_loss(
@@ -1342,6 +1352,8 @@ def _objective_metadata(target: TrainingTarget) -> dict[str, object]:
             "slot_matched_off_loss": SLOT_MATCHED_OFF_LOSS_WEIGHT,
             "slot_active_duration_loss": SLOT_ACTIVE_DURATION_LOSS_WEIGHT,
             "slot_boundary_mass_loss": SLOT_BOUNDARY_MASS_LOSS_WEIGHT,
+            "slot_duration_underactive": SLOT_DURATION_UNDERACTIVE_WEIGHT,
+            "slot_duration_overactive": SLOT_DURATION_OVERACTIVE_WEIGHT,
             "slot_phase_overlap_loss": SLOT_PHASE_OVERLAP_LOSS_WEIGHT,
             "slot_unmatched_off_loss": SLOT_UNMATCHED_OFF_LOSS_WEIGHT,
             "slot_duplicate_loss": SLOT_DUPLICATE_LOSS_WEIGHT,

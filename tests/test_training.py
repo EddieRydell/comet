@@ -614,9 +614,11 @@ def test_anonymous_training_checkpoint_includes_optimizer_rng_and_objective() ->
     assert checkpoint["global_step"] == 17
     assert checkpoint["best_validation_loss"] == 1.25
     assert checkpoint["rng_state"]["torch"].numel() > 0
-    assert checkpoint["objective"]["version"] == "phase_event_stable_v3"
+    assert checkpoint["objective"]["version"] == "phase_event_stable_v4"
     assert checkpoint["objective"]["weights"]["slot_event_count_loss"] == 0.0
-    assert checkpoint["objective"]["weights"]["slot_boundary_mass_loss"] == 0.25
+    assert checkpoint["objective"]["weights"]["slot_boundary_mass_loss"] == 0.1
+    assert checkpoint["objective"]["weights"]["slot_duration_underactive"] == 2.0
+    assert checkpoint["objective"]["weights"]["slot_duration_overactive"] == 0.5
 
 
 def test_evaluation_matching_scores_unique_duplicate_onsets_once() -> None:
