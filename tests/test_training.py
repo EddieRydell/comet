@@ -266,6 +266,14 @@ def test_anonymous_slot_model_uses_event_boundary_heads_and_activity_loss(tmp_pa
     loss, metrics = compute_anonymous_slot_loss(outputs, batch)
 
     assert outputs["slot_active"].shape == (1, 4, frame_count(SAMPLE_RATE))
+    assert outputs["slot_phase_logits"].shape == (1, 4, 4, frame_count(SAMPLE_RATE))
+    phase_probability = torch.softmax(outputs["slot_phase_logits"], dim=2)
+    assert torch.allclose(
+        phase_probability.sum(dim=2),
+        torch.ones_like(outputs["slot_active"]),
+        atol=1e-5,
+    )
+    assert torch.allclose(outputs["slot_active"], phase_probability[:, :, 1:].sum(dim=2))
     for name in SLOT_PHASE_NAMES:
         assert outputs[name].shape == outputs["slot_active"].shape
     for name in SLOT_BOUNDARY_NAMES:
@@ -414,6 +422,25 @@ def test_full_duration_phase_predictions_score_worse_than_localized_predictions(
     full_duration_loss, _ = compute_anonymous_slot_loss(full_duration, batch)
 
     assert full_duration_loss > localized_loss
+
+
+def test_off_phase_competition_penalizes_active_target_frames() -> None:
+    batch = _small_anonymous_batch()
+    off_predictions = _anonymous_predictions()
+    active_predictions = _anonymous_predictions()
+    off_predictions["slot_phase_logits"] = torch.full((1, 2, 4, 20), -4.0)
+    active_predictions["slot_phase_logits"] = torch.full((1, 2, 4, 20), -4.0)
+    off_predictions["slot_phase_logits"][:, :, 0] = 4.0
+    active_predictions["slot_phase_logits"][:, :, 0] = 4.0
+    active_predictions["slot_phase_logits"][0, 0, 0, 2:8] = -4.0
+    active_predictions["slot_phase_logits"][0, 0, 1, 2:4] = 4.0
+    active_predictions["slot_phase_logits"][0, 0, 2, 4:6] = 4.0
+    active_predictions["slot_phase_logits"][0, 0, 3, 6:8] = 4.0
+
+    off_loss, _ = compute_anonymous_slot_loss(off_predictions, batch)
+    active_loss, _ = compute_anonymous_slot_loss(active_predictions, batch)
+
+    assert off_loss > active_loss
 
 
 def test_matched_slot_inactive_frames_are_penalized_by_implied_off_loss() -> None:
@@ -614,11 +641,17 @@ def test_anonymous_training_checkpoint_includes_optimizer_rng_and_objective() ->
     assert checkpoint["global_step"] == 17
     assert checkpoint["best_validation_loss"] == 1.25
     assert checkpoint["rng_state"]["torch"].numel() > 0
-    assert checkpoint["objective"]["version"] == "phase_event_stable_v4"
+    assert checkpoint["objective"]["version"] == "phase_event_off_phase_v1"
     assert checkpoint["objective"]["weights"]["slot_event_count_loss"] == 0.0
     assert checkpoint["objective"]["weights"]["slot_boundary_mass_loss"] == 0.1
     assert checkpoint["objective"]["weights"]["slot_duration_underactive"] == 2.0
     assert checkpoint["objective"]["weights"]["slot_duration_overactive"] == 0.5
+    assert checkpoint["objective"]["weights"]["slot_phase_classes"] == (
+        "off",
+        "attack",
+        "held",
+        "release",
+    )
 
 
 def test_evaluation_matching_scores_unique_duplicate_onsets_once() -> None:

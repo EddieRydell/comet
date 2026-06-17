@@ -45,7 +45,7 @@ SLOT_DURATION_OVERACTIVE_WEIGHT = 0.5
 SLOT_TVERSKY_FALSE_POSITIVE_WEIGHT = 0.7
 SLOT_TVERSKY_FALSE_NEGATIVE_WEIGHT = 0.3
 SLOT_DUPLICATE_SIMILARITY_THRESHOLD = 0.6
-ANONYMOUS_SLOT_OBJECTIVE_VERSION = "phase_event_stable_v4"
+ANONYMOUS_SLOT_OBJECTIVE_VERSION = "phase_event_off_phase_v1"
 SLOT_PHASE_NAMES = ("slot_attack", "slot_held", "slot_release")
 SLOT_BOUNDARY_NAMES = ("slot_onset", "slot_attack_end", "slot_release_start", "slot_offset")
 SLOT_BOUNDARY_WEIGHTS = {
@@ -534,7 +534,7 @@ class SlotAttentionEventModel(nn.Module):
             nn.LayerNorm(slot_dim),
             nn.Linear(slot_dim, slot_dim),
             nn.SiLU(),
-            nn.Linear(slot_dim, 7),
+            nn.Linear(slot_dim, 8),
         )
         self.slot_activity_head = nn.Sequential(
             nn.LayerNorm(slot_dim),
@@ -571,18 +571,19 @@ class SlotAttentionEventModel(nn.Module):
             slots = slots + self.slot_mlp(slots)
         slot_time_features = self.feature_norm(features[:, None] + slots[:, :, None])
         logits = self.slot_time_head(slot_time_features).permute(0, 1, 3, 2).contiguous()
-        phase_probability = torch.stack(
-            [torch.sigmoid(logits[:, :, index]) for index in range(3)], dim=2
-        ).amax(dim=2)
+        phase_logits = logits[:, :, :4]
+        phase_probability = torch.softmax(phase_logits, dim=2)
+        public_phase_logits = torch.logit(phase_probability.clamp(1e-6, 1.0 - 1e-6))
         return {
-            "slot_attack": logits[:, :, 0],
-            "slot_held": logits[:, :, 1],
-            "slot_release": logits[:, :, 2],
-            "slot_onset": logits[:, :, 3],
-            "slot_attack_end": logits[:, :, 4],
-            "slot_release_start": logits[:, :, 5],
-            "slot_offset": logits[:, :, 6],
-            "slot_active": phase_probability,
+            "slot_phase_logits": phase_logits,
+            "slot_attack": public_phase_logits[:, :, 1],
+            "slot_held": public_phase_logits[:, :, 2],
+            "slot_release": public_phase_logits[:, :, 3],
+            "slot_onset": logits[:, :, 4],
+            "slot_attack_end": logits[:, :, 5],
+            "slot_release_start": logits[:, :, 6],
+            "slot_offset": logits[:, :, 7],
+            "slot_active": phase_probability[:, :, 1:].sum(dim=2),
             "slot_activity": self.slot_activity_head(slots).squeeze(-1),
         }
 
@@ -853,6 +854,8 @@ def _target_phase_active(targets: dict[str, Tensor]) -> Tensor:
 
 
 def _phase_active_probability(predictions: dict[str, Tensor]) -> Tensor:
+    if "slot_phase_logits" in predictions:
+        return torch.softmax(predictions["slot_phase_logits"], dim=2)[:, :, 1:].sum(dim=2)
     return torch.stack([torch.sigmoid(predictions[name]) for name in SLOT_PHASE_NAMES], dim=2).amax(
         dim=2
     )
@@ -871,6 +874,13 @@ def _slot_phase_loss(
     pred_indices: Tensor,
     target_indices: Tensor,
 ) -> Tensor:
+    if "slot_phase_logits" in predictions:
+        logits = predictions["slot_phase_logits"][batch_indices, pred_indices]
+        target_classes = _slot_phase_target_classes(targets, batch_indices, target_indices)
+        return torch.nn.functional.cross_entropy(
+            logits,
+            target_classes,
+        )
     losses = []
     for name in SLOT_PHASE_NAMES:
         logits = predictions[name][batch_indices, pred_indices]
@@ -880,6 +890,20 @@ def _slot_phase_loss(
             + _soft_dice_loss(torch.sigmoid(logits), target)
         )
     return torch.stack(losses).mean()
+
+
+def _slot_phase_target_classes(
+    targets: dict[str, Tensor],
+    batch_indices: Tensor,
+    target_indices: Tensor,
+) -> Tensor:
+    active = _target_phase_active(targets)[batch_indices, target_indices]
+    phase_stack = torch.stack(
+        [targets[name][batch_indices, target_indices].float() for name in SLOT_PHASE_NAMES],
+        dim=1,
+    )
+    phase_classes = phase_stack.argmax(dim=1) + 1
+    return torch.where(active >= 0.5, phase_classes, torch.zeros_like(phase_classes))
 
 
 def _active_tversky_loss(active_probability: Tensor, active_targets: Tensor) -> Tensor:
@@ -1354,6 +1378,7 @@ def _objective_metadata(target: TrainingTarget) -> dict[str, object]:
             "slot_boundary_mass_loss": SLOT_BOUNDARY_MASS_LOSS_WEIGHT,
             "slot_duration_underactive": SLOT_DURATION_UNDERACTIVE_WEIGHT,
             "slot_duration_overactive": SLOT_DURATION_OVERACTIVE_WEIGHT,
+            "slot_phase_classes": ("off", "attack", "held", "release"),
             "slot_phase_overlap_loss": SLOT_PHASE_OVERLAP_LOSS_WEIGHT,
             "slot_unmatched_off_loss": SLOT_UNMATCHED_OFF_LOSS_WEIGHT,
             "slot_duplicate_loss": SLOT_DUPLICATE_LOSS_WEIGHT,
