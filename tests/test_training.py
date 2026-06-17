@@ -14,8 +14,18 @@ from comet_audio.models import BatchManifestEntry
 from comet_audio.training import (
     HOP_LENGTH,
     SAMPLE_RATE,
+    SLOT_ACTIVE_DURATION_LOSS_WEIGHT,
+    SLOT_ACTIVE_TVERSKY_LOSS_WEIGHT,
+    SLOT_ACTIVITY_LOSS_WEIGHT,
+    SLOT_BOUNDARY_LOSS_WEIGHT,
     SLOT_BOUNDARY_NAMES,
+    SLOT_DUPLICATE_LOSS_WEIGHT,
+    SLOT_EVENT_COUNT_LOSS_WEIGHT,
+    SLOT_MATCHED_OFF_LOSS_WEIGHT,
+    SLOT_PHASE_LOSS_WEIGHT,
     SLOT_PHASE_NAMES,
+    SLOT_PHASE_OVERLAP_LOSS_WEIGHT,
+    SLOT_UNMATCHED_OFF_LOSS_WEIGHT,
     CNNTCNTimingModel,
     CometTimingDataset,
     DatasetItem,
@@ -23,6 +33,8 @@ from comet_audio.training import (
     TrainingClipMetadata,
     TrainingEventMetadata,
     TrainingSourceMetadata,
+    _require_finite_model_gradients,
+    _training_checkpoint_payload,
     build_anonymous_slot_targets,
     build_targets,
     compute_anonymous_slot_loss,
@@ -54,6 +66,41 @@ def _dummy_items(count: int) -> list[DatasetItem]:
         )
         for index in range(count)
     ]
+
+
+def _small_anonymous_batch(time: int = 20, slots: int = 2) -> dict[str, torch.Tensor]:
+    target_active = torch.zeros(1, slots, time)
+    target_active[0, 0, 2:8] = 1.0
+    batch = {
+        "slot_attack": torch.zeros(1, slots, time),
+        "slot_held": torch.zeros(1, slots, time),
+        "slot_release": torch.zeros(1, slots, time),
+        "slot_active": target_active,
+        "slot_onset": torch.zeros(1, slots, time),
+        "slot_attack_end": torch.zeros(1, slots, time),
+        "slot_release_start": torch.zeros(1, slots, time),
+        "slot_offset": torch.zeros(1, slots, time),
+        "slot_activity": target_active.any(dim=-1).float(),
+    }
+    batch["slot_onset"][0, 0, 2] = 1.0
+    batch["slot_attack_end"][0, 0, 4] = 1.0
+    batch["slot_release_start"][0, 0, 6] = 1.0
+    batch["slot_offset"][0, 0, 8] = 1.0
+    batch["slot_attack"][0, 0, 2:4] = 1.0
+    batch["slot_held"][0, 0, 4:6] = 1.0
+    batch["slot_release"][0, 0, 6:8] = 1.0
+    return batch
+
+
+def _anonymous_predictions(
+    fill: float = -4.0, time: int = 20, slots: int = 2
+) -> dict[str, torch.Tensor]:
+    predictions = {
+        name: torch.full((1, slots, time), fill)
+        for name in (*SLOT_PHASE_NAMES, *SLOT_BOUNDARY_NAMES)
+    }
+    predictions["slot_activity"] = torch.full((1, slots), fill)
+    return predictions
 
 
 def test_dataset_loads_manifest_audio_and_metadata(tmp_path: Path) -> None:
@@ -227,10 +274,19 @@ def test_anonymous_slot_model_uses_event_boundary_heads_and_activity_loss(tmp_pa
     assert metrics["slot_active_tversky_loss"] >= 0.0
     assert metrics["slot_boundary_loss"] >= 0.0
     assert metrics["slot_event_count_loss"] >= 0.0
+    assert metrics["slot_matched_off_loss"] >= 0.0
+    assert metrics["slot_active_duration_loss"] >= 0.0
     assert metrics["slot_phase_overlap_loss"] >= 0.0
     assert metrics["slot_unmatched_off_loss"] >= 0.0
     assert metrics["slot_duplicate_loss"] >= 0.0
     assert metrics["slot_activity_loss"] >= 0.0
+    assert metrics["slot_pred_active_fraction"] >= 0.0
+    assert metrics["slot_target_active_fraction"] >= 0.0
+    assert metrics["slot_active_duration_abs_error"] >= 0.0
+    assert metrics["slot_frame_zero_active_rate"] >= 0.0
+    assert metrics["slot_pred_nonempty_count"] >= 0.0
+    assert metrics["slot_onset_boundary_mass"] >= 0.0
+    assert metrics["slot_offset_boundary_mass"] >= 0.0
 
 
 def test_anonymous_slot_targets_include_normal_and_zero_length_phases() -> None:
@@ -316,6 +372,83 @@ def test_anonymous_slot_loss_penalizes_overactive_predictions() -> None:
     all_on_loss, _ = compute_anonymous_slot_loss(all_on, batch)
 
     assert all_on_loss > mostly_off_loss
+
+
+def test_anonymous_slot_loss_is_finite_float32_for_bfloat16_outputs() -> None:
+    batch = _small_anonymous_batch()
+    predictions = _anonymous_predictions()
+    predictions["slot_held"][0, 0, 2:8] = 4.0
+    predictions["slot_onset"][0, 0, 2] = 4.0
+    predictions["slot_offset"][0, 0, 8] = 4.0
+    predictions["slot_activity"] = torch.tensor([[4.0, -4.0]])
+    predictions = {key: value.to(torch.bfloat16) for key, value in predictions.items()}
+
+    loss, metrics = compute_anonymous_slot_loss(predictions, batch, detach_metrics=False)
+
+    assert torch.isfinite(loss)
+    assert loss.dtype == torch.float32
+    assert metrics["slot_phase_loss"].dtype == torch.float32
+
+
+def test_full_duration_phase_predictions_score_worse_than_localized_predictions() -> None:
+    batch = _small_anonymous_batch()
+    localized = _anonymous_predictions()
+    localized["slot_attack"][0, 0, 2:4] = 4.0
+    localized["slot_held"][0, 0, 4:6] = 4.0
+    localized["slot_release"][0, 0, 6:8] = 4.0
+    localized["slot_onset"][0, 0, 2] = 4.0
+    localized["slot_attack_end"][0, 0, 4] = 4.0
+    localized["slot_release_start"][0, 0, 6] = 4.0
+    localized["slot_offset"][0, 0, 8] = 4.0
+    localized["slot_activity"] = torch.tensor([[4.0, -4.0]])
+    full_duration = _anonymous_predictions()
+    full_duration["slot_held"][0, 0] = 4.0
+    full_duration["slot_onset"][0, 0, 2] = 4.0
+    full_duration["slot_offset"][0, 0, 8] = 4.0
+    full_duration["slot_activity"] = torch.tensor([[4.0, -4.0]])
+
+    localized_loss, _ = compute_anonymous_slot_loss(localized, batch)
+    full_duration_loss, _ = compute_anonymous_slot_loss(full_duration, batch)
+
+    assert full_duration_loss > localized_loss
+
+
+def test_matched_slot_inactive_frames_are_penalized_by_implied_off_loss() -> None:
+    batch = _small_anonymous_batch()
+    predictions = _anonymous_predictions()
+    predictions["slot_held"][0, 0, 2:8] = 4.0
+    predictions["slot_held"][0, 0, 10:18] = 4.0
+    predictions["slot_activity"] = torch.tensor([[4.0, -4.0]])
+
+    _loss, metrics = compute_anonymous_slot_loss(predictions, batch)
+
+    assert metrics["slot_matched_off_loss"] > 0.0
+    assert metrics["slot_active_duration_loss"] > 0.0
+
+
+def test_slot_event_count_metric_is_zero_weighted_in_total_loss() -> None:
+    batch = _small_anonymous_batch()
+    predictions = _anonymous_predictions()
+    predictions["slot_onset"][0, 0] = 4.0
+    predictions["slot_offset"][0, 0] = 4.0
+    predictions["slot_activity"] = torch.tensor([[4.0, -4.0]])
+
+    loss, metrics = compute_anonymous_slot_loss(predictions, batch)
+    weighted_without_event_count = (
+        SLOT_PHASE_LOSS_WEIGHT * metrics["slot_phase_loss"]
+        + SLOT_ACTIVE_TVERSKY_LOSS_WEIGHT * metrics["slot_active_tversky_loss"]
+        + SLOT_BOUNDARY_LOSS_WEIGHT * metrics["slot_boundary_loss"]
+        + SLOT_MATCHED_OFF_LOSS_WEIGHT * metrics["slot_matched_off_loss"]
+        + SLOT_ACTIVE_DURATION_LOSS_WEIGHT * metrics["slot_active_duration_loss"]
+        + SLOT_PHASE_OVERLAP_LOSS_WEIGHT * metrics["slot_phase_overlap_loss"]
+        + SLOT_UNMATCHED_OFF_LOSS_WEIGHT * metrics["slot_unmatched_off_loss"]
+        + SLOT_DUPLICATE_LOSS_WEIGHT * metrics["slot_duplicate_loss"]
+        + SLOT_ACTIVITY_LOSS_WEIGHT * metrics["slot_activity_loss"]
+    )
+
+    assert SLOT_EVENT_COUNT_LOSS_WEIGHT == 0.0
+    assert metrics["slot_event_count_loss"] > 0.0
+    assert loss.item() == pytest.approx(weighted_without_event_count)
 
 
 def test_anonymous_slot_loss_reports_duplicate_slot_penalty() -> None:
@@ -422,6 +555,39 @@ def test_slot_inference_rejects_old_anonymous_architecture(tmp_path: Path) -> No
 
     with pytest.raises(ValueError, match="slot_attention_phase_event_v1"):
         predict_anonymous_slots(audio_path, run_dir, tmp_path / "out")
+
+
+def test_nonfinite_gradient_guard_names_bad_parameter() -> None:
+    model = torch.nn.Linear(2, 1)
+    model.weight.grad = torch.full_like(model.weight, float("nan"))
+    model.bias.grad = torch.zeros_like(model.bias)
+
+    with pytest.raises(RuntimeError, match="weight"):
+        _require_finite_model_gradients(model)
+
+
+def test_anonymous_training_checkpoint_includes_optimizer_rng_and_objective() -> None:
+    model = torch.nn.Linear(2, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+
+    checkpoint = _training_checkpoint_payload(
+        model=model,
+        optimizer=optimizer,
+        epoch=3,
+        global_step=17,
+        best_validation_loss=1.25,
+        target="anonymous_slots_v1",
+        max_tracks=2,
+        crop_seconds=0.15,
+    )
+
+    assert "optimizer" in checkpoint
+    assert checkpoint["epoch"] == 3
+    assert checkpoint["global_step"] == 17
+    assert checkpoint["best_validation_loss"] == 1.25
+    assert checkpoint["rng_state"]["torch"].numel() > 0
+    assert checkpoint["objective"]["version"] == "phase_event_stable_v2"
+    assert checkpoint["objective"]["weights"]["slot_event_count_loss"] == 0.0
 
 
 def test_evaluation_matching_scores_unique_duplicate_onsets_once() -> None:

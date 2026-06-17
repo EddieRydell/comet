@@ -32,14 +32,17 @@ TrainingTarget = Literal["source_types_v1", "anonymous_slots_v1"]
 SLOT_PHASE_LOSS_WEIGHT = 1.0
 SLOT_ACTIVE_TVERSKY_LOSS_WEIGHT = 0.5
 SLOT_BOUNDARY_LOSS_WEIGHT = 0.35
-SLOT_EVENT_COUNT_LOSS_WEIGHT = 0.15
+SLOT_EVENT_COUNT_LOSS_WEIGHT = 0.0
 SLOT_PHASE_OVERLAP_LOSS_WEIGHT = 0.10
 SLOT_UNMATCHED_OFF_LOSS_WEIGHT = 0.75
 SLOT_DUPLICATE_LOSS_WEIGHT = 0.25
 SLOT_ACTIVITY_LOSS_WEIGHT = 0.05
+SLOT_MATCHED_OFF_LOSS_WEIGHT = 0.5
+SLOT_ACTIVE_DURATION_LOSS_WEIGHT = 0.25
 SLOT_TVERSKY_FALSE_POSITIVE_WEIGHT = 0.7
 SLOT_TVERSKY_FALSE_NEGATIVE_WEIGHT = 0.3
 SLOT_DUPLICATE_SIMILARITY_THRESHOLD = 0.85
+ANONYMOUS_SLOT_OBJECTIVE_VERSION = "phase_event_stable_v2"
 SLOT_PHASE_NAMES = ("slot_attack", "slot_held", "slot_release")
 SLOT_BOUNDARY_NAMES = ("slot_onset", "slot_attack_end", "slot_release_start", "slot_offset")
 SLOT_BOUNDARY_WEIGHTS = {
@@ -299,7 +302,11 @@ class CometTimingDataset(Dataset[dict[str, Tensor]]):
                 crop_start_seconds=crop_start,
                 sample_rate=metadata.sample_rate,
             )
-        return {"waveform": waveform, **targets}
+        return {
+            "waveform": waveform,
+            "clip_index": torch.tensor(index, dtype=torch.int64),
+            **targets,
+        }
 
     def _load_metadata(self, path: Path) -> ClipMetadata | TrainingClipMetadata:
         metadata = self._metadata_cache.get(path)
@@ -661,10 +668,11 @@ def compute_anonymous_slot_loss(
 ) -> tuple[Tensor, dict[str, float] | dict[str, Tensor]]:
     time = min(predictions["slot_attack"].shape[-1], batch["slot_attack"].shape[-1])
     pred = {
-        key: value[..., :time] if value.ndim >= 3 else value for key, value in predictions.items()
+        key: (value[..., :time] if value.ndim >= 3 else value).float()
+        for key, value in predictions.items()
     }
     target = {
-        key: value[..., :time] if value.ndim >= 3 else value
+        key: (value[..., :time] if value.ndim >= 3 else value).float()
         for key, value in batch.items()
         if key
         in {
@@ -733,11 +741,21 @@ def compute_anonymous_slot_loss(
             pred_indices,
             target_indices,
         )
+        matched_off_loss = _matched_slot_off_loss(
+            pred_active_probability[batch_indices, pred_indices],
+            matched_active_targets,
+        )
+        active_duration_loss = _active_duration_ratio_loss(
+            pred_active_probability[batch_indices, pred_indices],
+            matched_active_targets,
+        )
     else:
         slot_phase_loss = zero
         slot_active_tversky_loss = zero
         slot_boundary_loss = zero
         event_count_loss = zero
+        matched_off_loss = zero
+        active_duration_loss = zero
     if unmatched_batch_indices:
         batch_indices = torch.as_tensor(unmatched_batch_indices, device=pred["slot_attack"].device)
         pred_indices = torch.as_tensor(unmatched_pred_indices, device=pred["slot_attack"].device)
@@ -785,6 +803,8 @@ def compute_anonymous_slot_loss(
         + SLOT_ACTIVE_TVERSKY_LOSS_WEIGHT * slot_active_tversky_loss
         + SLOT_BOUNDARY_LOSS_WEIGHT * slot_boundary_loss
         + SLOT_EVENT_COUNT_LOSS_WEIGHT * event_count_loss
+        + SLOT_MATCHED_OFF_LOSS_WEIGHT * matched_off_loss
+        + SLOT_ACTIVE_DURATION_LOSS_WEIGHT * active_duration_loss
         + SLOT_PHASE_OVERLAP_LOSS_WEIGHT * slot_phase_overlap_loss
         + SLOT_UNMATCHED_OFF_LOSS_WEIGHT * unmatched_off_loss
         + SLOT_DUPLICATE_LOSS_WEIGHT * duplicate_loss
@@ -797,19 +817,30 @@ def compute_anonymous_slot_loss(
         "slot_active_tversky_loss": slot_active_tversky_loss.detach(),
         "slot_boundary_loss": slot_boundary_loss.detach(),
         "slot_event_count_loss": event_count_loss.detach(),
+        "slot_matched_off_loss": matched_off_loss.detach(),
+        "slot_active_duration_loss": active_duration_loss.detach(),
         "slot_phase_overlap_loss": slot_phase_overlap_loss.detach(),
         "slot_unmatched_off_loss": unmatched_off_loss.detach(),
         "slot_duplicate_loss": duplicate_loss.detach(),
         "slot_activity_loss": activity_loss.detach(),
     }
+    metrics.update(_anonymous_slot_diagnostics(pred, target, assignments))
+    for key, value in metrics.items():
+        _require_finite_tensor(f"anonymous slot metric {key!r}", value)
     if detach_metrics:
         return total, {key: float(value.cpu()) for key, value in metrics.items()}
     return total, metrics
 
 
 def _require_finite_tensor(name: str, value: Tensor) -> None:
-    if not bool(torch.isfinite(value).all()):
-        raise RuntimeError(f"Non-finite tensor encountered in {name}")
+    finite = torch.isfinite(value)
+    if not bool(finite.all()):
+        bad = int((~finite).sum().detach().cpu())
+        total = value.numel()
+        sample = value.detach().flatten()[~finite.detach().flatten()][:3].cpu().tolist()
+        raise RuntimeError(
+            f"Non-finite tensor encountered in {name}: {bad}/{total} values, sample={sample}"
+        )
 
 
 def _target_phase_active(targets: dict[str, Tensor]) -> Tensor:
@@ -857,6 +888,20 @@ def _active_tversky_loss(active_probability: Tensor, active_targets: Tensor) -> 
         + 1e-6
     )
     return (1.0 - ((true_positive + 1e-6) / denominator)).mean()
+
+
+def _matched_slot_off_loss(active_probability: Tensor, active_targets: Tensor) -> Tensor:
+    inactive_mask = active_targets < 0.5
+    if not bool(inactive_mask.any()):
+        return active_probability.sum() * 0.0
+    inactive_probability = active_probability[inactive_mask].clamp(1e-6, 1.0 - 1e-6)
+    return -torch.log1p(-inactive_probability).mean()
+
+
+def _active_duration_ratio_loss(active_probability: Tensor, active_targets: Tensor) -> Tensor:
+    predicted_duration = active_probability.mean(dim=-1)
+    target_duration = active_targets.float().mean(dim=-1)
+    return torch.nn.functional.smooth_l1_loss(predicted_duration, target_duration)
 
 
 def _slot_boundary_loss(
@@ -936,6 +981,45 @@ def _slot_duplicate_loss(slot_tracks: Tensor) -> Tensor:
     return torch.stack(losses).mean()
 
 
+def _anonymous_slot_diagnostics(
+    predictions: dict[str, Tensor],
+    targets: dict[str, Tensor],
+    assignments: list[list[tuple[int, int]]],
+) -> dict[str, Tensor]:
+    active_probability = _phase_active_probability(predictions)
+    target_active = targets["slot_active"].float()
+    target_activity = targets["slot_activity"].float()
+    predicted_nonempty = (active_probability.mean(dim=-1) >= 0.02).float().sum(dim=-1).mean()
+    diagnostics = {
+        "slot_pred_active_fraction": active_probability.mean().detach(),
+        "slot_target_active_fraction": target_active.mean().detach(),
+        "slot_frame_zero_active_rate": active_probability[..., 0].mean().detach(),
+        "slot_pred_nonempty_count": predicted_nonempty.detach(),
+        "slot_onset_boundary_mass": torch.sigmoid(predictions["slot_onset"]).mean().detach(),
+        "slot_offset_boundary_mass": torch.sigmoid(predictions["slot_offset"]).mean().detach(),
+    }
+    batch_indices: list[int] = []
+    pred_indices: list[int] = []
+    target_indices: list[int] = []
+    for batch_index, assignment in enumerate(assignments):
+        for pred_index, target_index in assignment:
+            batch_indices.append(batch_index)
+            pred_indices.append(pred_index)
+            target_indices.append(target_index)
+    if batch_indices:
+        batch_tensor = torch.as_tensor(batch_indices, device=active_probability.device)
+        pred_tensor = torch.as_tensor(pred_indices, device=active_probability.device)
+        target_tensor = torch.as_tensor(target_indices, device=active_probability.device)
+        pred_duration = active_probability[batch_tensor, pred_tensor].mean(dim=-1)
+        target_duration = target_active[batch_tensor, target_tensor].mean(dim=-1)
+        duration_error = (pred_duration - target_duration).abs().mean()
+    else:
+        duration_error = active_probability.sum() * 0.0
+    diagnostics["slot_active_duration_abs_error"] = duration_error.detach()
+    diagnostics["slot_target_nonempty_count"] = target_activity.sum(dim=-1).mean().detach()
+    return diagnostics
+
+
 def _slot_assignments(
     predictions: dict[str, Tensor], targets: dict[str, Tensor]
 ) -> list[list[tuple[int, int]]]:
@@ -1000,7 +1084,7 @@ def _slot_assignments(
                 + 0.20 * boundary_cost
                 + 0.10 * activity_cost
             ).clamp(0.0, 10.0)
-            _require_finite_tensor("anonymous slot assignment cost", cost)
+            _require_finite_tensor(f"anonymous slot assignment cost batch {batch_index}", cost)
             pred_indices, target_columns = linear_sum_assignment(cost.numpy())
             rows.append(
                 [
@@ -1076,38 +1160,52 @@ def train_model(
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     scaler = torch.amp.GradScaler("cuda", enabled=False)
     best_val = math.inf
+    global_step = 0
     metrics_path = run_dir / "metrics.jsonl"
 
     for epoch in range(1, epochs + 1):
-        train_metrics = _run_epoch(
-            model, train_loader, optimizer, scaler, device, training=True, target=target
+        train_metrics, global_step = _run_epoch(
+            model,
+            train_loader,
+            optimizer,
+            scaler,
+            device,
+            training=True,
+            target=target,
+            run_dir=run_dir,
+            epoch=epoch,
+            global_step=global_step,
         )
-        val_metrics = _run_epoch(
-            model, val_loader, optimizer, scaler, device, training=False, target=target
+        val_metrics, global_step = _run_epoch(
+            model,
+            val_loader,
+            optimizer,
+            scaler,
+            device,
+            training=False,
+            target=target,
+            run_dir=run_dir,
+            epoch=epoch,
+            global_step=global_step,
         )
         row = {"epoch": epoch, "train": train_metrics, "val": val_metrics}
         with metrics_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
-        checkpoint = {
-            "model": model.state_dict(),
-            "epoch": epoch,
-            "target": target,
-            "architecture": (
-                "slot_attention_phase_event_v1" if target == "anonymous_slots_v1" else "cnn_tcn_v1"
-            ),
-            "source_types": [] if target == "anonymous_slots_v1" else SOURCE_TYPES,
-            "max_tracks": max_tracks if target == "anonymous_slots_v1" else None,
-            "config": {
-                "sample_rate": SAMPLE_RATE,
-                "n_fft": N_FFT,
-                "hop_length": HOP_LENGTH,
-                "n_mels": N_MELS,
-                "crop_seconds": crop_seconds,
-            },
-        }
-        torch.save(checkpoint, run_dir / "last.pt")
-        if val_metrics["loss"] < best_val:
+        is_best = val_metrics["loss"] < best_val
+        if is_best:
             best_val = val_metrics["loss"]
+        checkpoint = _training_checkpoint_payload(
+            model=model,
+            optimizer=optimizer,
+            epoch=epoch,
+            global_step=global_step,
+            best_validation_loss=best_val,
+            target=target,
+            max_tracks=max_tracks,
+            crop_seconds=crop_seconds,
+        )
+        torch.save(checkpoint, run_dir / "last.pt")
+        if is_best:
             torch.save(checkpoint, run_dir / "best.pt")
 
 
@@ -1119,47 +1217,198 @@ def _run_epoch(
     device: torch.device,
     training: bool,
     target: TrainingTarget = "source_types_v1",
-) -> dict[str, float]:
+    run_dir: Path | None = None,
+    epoch: int = 0,
+    global_step: int = 0,
+) -> tuple[dict[str, float], int]:
     model.train(training)
     totals: dict[str, Tensor] = {}
     count = 0
+    recent_metrics: list[dict[str, float]] = []
     iterator = tqdm(loader, leave=False, desc="train" if training else "val", mininterval=5.0)
     for batch in iterator:
-        batch = {key: value.to(device, non_blocking=True) for key, value in batch.items()}
-        with (
-            torch.set_grad_enabled(training),
-            torch.amp.autocast(
-                "cuda",
-                enabled=device.type == "cuda",
-                dtype=torch.bfloat16,
-            ),
-        ):
-            predictions = model(batch["waveform"])
-            if target == "anonymous_slots_v1":
-                loss, metrics = compute_anonymous_slot_loss(
-                    predictions, batch, detach_metrics=False
+        batch = {
+            key: value.to(device, non_blocking=True) if isinstance(value, Tensor) else value
+            for key, value in batch.items()
+        }
+        grad_norm: Tensor | None = None
+        try:
+            with (
+                torch.set_grad_enabled(training),
+                torch.amp.autocast(
+                    "cuda",
+                    enabled=device.type == "cuda",
+                    dtype=torch.bfloat16,
+                ),
+            ):
+                predictions = model(batch["waveform"])
+                if target == "anonymous_slots_v1":
+                    _require_finite_outputs(predictions)
+                    loss, metrics = compute_anonymous_slot_loss(
+                        predictions, batch, detach_metrics=False
+                    )
+                else:
+                    loss, metrics = compute_loss(predictions, batch, detach_metrics=False)
+            if training:
+                _require_finite_tensor("training loss", loss)
+                optimizer.zero_grad(set_to_none=True)
+                scaler.scale(loss).backward()
+                if target == "anonymous_slots_v1":
+                    scaler.unscale_(optimizer)
+                    _require_finite_model_gradients(model)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    _require_finite_tensor("anonymous slot gradient norm", grad_norm)
+                    _require_finite_model_gradients(model)
+                scaler.step(optimizer)
+                scaler.update()
+                global_step += 1
+        except RuntimeError as error:
+            if target == "anonymous_slots_v1" and run_dir is not None:
+                _write_anonymous_debug_json(
+                    run_dir=run_dir,
+                    epoch=epoch,
+                    global_step=global_step,
+                    batch=batch,
+                    recent_metrics=recent_metrics,
+                    grad_norm=grad_norm,
+                    model=model,
+                    error=error,
                 )
-            else:
-                loss, metrics = compute_loss(predictions, batch, detach_metrics=False)
-        if training:
-            _require_finite_tensor("training loss", loss)
-            optimizer.zero_grad(set_to_none=True)
-            scaler.scale(loss).backward()
-            if target == "anonymous_slots_v1":
-                scaler.unscale_(optimizer)
-                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                _require_finite_tensor("anonymous slot gradient norm", grad_norm)
-            scaler.step(optimizer)
-            scaler.update()
+            raise
         batch_size = int(batch["waveform"].shape[0])
         count += batch_size
         for key, value in metrics.items():
             totals[key] = totals.get(key, value.new_zeros(())) + value * batch_size
+        recent_metrics.append({key: float(value.detach().cpu()) for key, value in metrics.items()})
+        recent_metrics = recent_metrics[-5:]
         if count % (batch_size * 100) == 0:
             iterator.set_postfix(loss=float(metrics["loss"].detach().cpu()))
     if count == 0:
-        return {"loss": math.inf}
-    return {key: float((value / max(count, 1)).cpu()) for key, value in totals.items()}
+        return {"loss": math.inf}, global_step
+    return {key: float((value / max(count, 1)).cpu()) for key, value in totals.items()}, global_step
+
+
+def _objective_metadata(target: TrainingTarget) -> dict[str, object]:
+    if target != "anonymous_slots_v1":
+        return {"name": target}
+    return {
+        "name": target,
+        "version": ANONYMOUS_SLOT_OBJECTIVE_VERSION,
+        "weights": {
+            "slot_phase_loss": SLOT_PHASE_LOSS_WEIGHT,
+            "slot_active_tversky_loss": SLOT_ACTIVE_TVERSKY_LOSS_WEIGHT,
+            "slot_boundary_loss": SLOT_BOUNDARY_LOSS_WEIGHT,
+            "slot_event_count_loss": SLOT_EVENT_COUNT_LOSS_WEIGHT,
+            "slot_matched_off_loss": SLOT_MATCHED_OFF_LOSS_WEIGHT,
+            "slot_active_duration_loss": SLOT_ACTIVE_DURATION_LOSS_WEIGHT,
+            "slot_phase_overlap_loss": SLOT_PHASE_OVERLAP_LOSS_WEIGHT,
+            "slot_unmatched_off_loss": SLOT_UNMATCHED_OFF_LOSS_WEIGHT,
+            "slot_duplicate_loss": SLOT_DUPLICATE_LOSS_WEIGHT,
+            "slot_activity_loss": SLOT_ACTIVITY_LOSS_WEIGHT,
+        },
+    }
+
+
+def _training_checkpoint_payload(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    epoch: int,
+    global_step: int,
+    best_validation_loss: float,
+    target: TrainingTarget,
+    max_tracks: int,
+    crop_seconds: float,
+) -> dict[str, object]:
+    return {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "epoch": epoch,
+        "global_step": global_step,
+        "best_validation_loss": best_validation_loss,
+        "target": target,
+        "architecture": (
+            "slot_attention_phase_event_v1" if target == "anonymous_slots_v1" else "cnn_tcn_v1"
+        ),
+        "objective": _objective_metadata(target),
+        "rng_state": _rng_state(),
+        "source_types": [] if target == "anonymous_slots_v1" else SOURCE_TYPES,
+        "max_tracks": max_tracks if target == "anonymous_slots_v1" else None,
+        "config": {
+            "sample_rate": SAMPLE_RATE,
+            "n_fft": N_FFT,
+            "hop_length": HOP_LENGTH,
+            "n_mels": N_MELS,
+            "crop_seconds": crop_seconds,
+        },
+    }
+
+
+def _rng_state() -> dict[str, object]:
+    numpy_state = np.random.get_state()
+    state: dict[str, object] = {
+        "python": random.getstate(),
+        "numpy": {
+            "bit_generator": numpy_state[0],
+            "state": numpy_state[1],
+            "position": numpy_state[2],
+            "has_gauss": numpy_state[3],
+            "cached_gaussian": numpy_state[4],
+        },
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def _require_finite_outputs(predictions: dict[str, Tensor]) -> None:
+    for name, value in predictions.items():
+        _require_finite_tensor(f"model output {name!r}", value)
+
+
+def _nonfinite_gradient_parameter_names(model: nn.Module) -> list[str]:
+    names: list[str] = []
+    for name, parameter in model.named_parameters():
+        if parameter.grad is not None and not bool(torch.isfinite(parameter.grad).all()):
+            names.append(name)
+    return names
+
+
+def _require_finite_model_gradients(model: nn.Module) -> None:
+    bad_names = _nonfinite_gradient_parameter_names(model)
+    if bad_names:
+        joined = ", ".join(bad_names)
+        raise RuntimeError(f"Non-finite gradient encountered in parameter(s): {joined}")
+
+
+def _write_anonymous_debug_json(
+    run_dir: Path,
+    epoch: int,
+    global_step: int,
+    batch: dict[str, object],
+    recent_metrics: list[dict[str, float]],
+    grad_norm: Tensor | None,
+    model: nn.Module,
+    error: RuntimeError,
+) -> None:
+    debug_dir = run_dir / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    clip_indices = batch.get("clip_index")
+    if isinstance(clip_indices, Tensor):
+        clip_identifiers = [int(value) for value in clip_indices.detach().cpu().flatten().tolist()]
+    else:
+        clip_identifiers = []
+    payload = {
+        "epoch": epoch,
+        "global_step": global_step,
+        "batch_clip_indices": clip_identifiers,
+        "recent_metrics": recent_metrics,
+        "grad_norm": None if grad_norm is None else float(grad_norm.detach().cpu()),
+        "offending_parameter_names": _nonfinite_gradient_parameter_names(model),
+        "error": str(error),
+    }
+    path = debug_dir / f"anonymous_slot_failure_epoch_{epoch:04d}_step_{global_step:08d}.json"
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def load_trained_model(run_dir: Path, device: torch.device) -> CNNTCNTimingModel:
@@ -1175,7 +1424,7 @@ def load_training_checkpoint(run_dir: Path, device: torch.device) -> dict[str, o
     checkpoint_path = run_dir / "best.pt"
     if not checkpoint_path.exists():
         checkpoint_path = run_dir / "last.pt"
-    return torch.load(checkpoint_path, map_location=device)
+    return torch.load(checkpoint_path, map_location=device, weights_only=False)
 
 
 def load_trained_source_types(run_dir: Path) -> tuple[str, ...]:
