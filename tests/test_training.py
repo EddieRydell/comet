@@ -18,6 +18,7 @@ from comet_audio.training import (
     SLOT_ACTIVE_TVERSKY_LOSS_WEIGHT,
     SLOT_ACTIVITY_LOSS_WEIGHT,
     SLOT_BOUNDARY_LOSS_WEIGHT,
+    SLOT_BOUNDARY_MASS_LOSS_WEIGHT,
     SLOT_BOUNDARY_NAMES,
     SLOT_DUPLICATE_LOSS_WEIGHT,
     SLOT_EVENT_COUNT_LOSS_WEIGHT,
@@ -34,6 +35,7 @@ from comet_audio.training import (
     TrainingEventMetadata,
     TrainingSourceMetadata,
     _require_finite_model_gradients,
+    _slot_assignments,
     _training_checkpoint_payload,
     build_anonymous_slot_targets,
     build_targets,
@@ -276,6 +278,7 @@ def test_anonymous_slot_model_uses_event_boundary_heads_and_activity_loss(tmp_pa
     assert metrics["slot_event_count_loss"] >= 0.0
     assert metrics["slot_matched_off_loss"] >= 0.0
     assert metrics["slot_active_duration_loss"] >= 0.0
+    assert metrics["slot_boundary_mass_loss"] >= 0.0
     assert metrics["slot_phase_overlap_loss"] >= 0.0
     assert metrics["slot_unmatched_off_loss"] >= 0.0
     assert metrics["slot_duplicate_loss"] >= 0.0
@@ -440,6 +443,7 @@ def test_slot_event_count_metric_is_zero_weighted_in_total_loss() -> None:
         + SLOT_BOUNDARY_LOSS_WEIGHT * metrics["slot_boundary_loss"]
         + SLOT_MATCHED_OFF_LOSS_WEIGHT * metrics["slot_matched_off_loss"]
         + SLOT_ACTIVE_DURATION_LOSS_WEIGHT * metrics["slot_active_duration_loss"]
+        + SLOT_BOUNDARY_MASS_LOSS_WEIGHT * metrics["slot_boundary_mass_loss"]
         + SLOT_PHASE_OVERLAP_LOSS_WEIGHT * metrics["slot_phase_overlap_loss"]
         + SLOT_UNMATCHED_OFF_LOSS_WEIGHT * metrics["slot_unmatched_off_loss"]
         + SLOT_DUPLICATE_LOSS_WEIGHT * metrics["slot_duplicate_loss"]
@@ -449,6 +453,30 @@ def test_slot_event_count_metric_is_zero_weighted_in_total_loss() -> None:
     assert SLOT_EVENT_COUNT_LOSS_WEIGHT == 0.0
     assert metrics["slot_event_count_loss"] > 0.0
     assert loss.item() == pytest.approx(weighted_without_event_count)
+
+
+def test_assignment_prefers_localized_slot_over_broad_active_blanket() -> None:
+    batch = _small_anonymous_batch()
+    predictions = _anonymous_predictions()
+    for name in SLOT_PHASE_NAMES:
+        predictions[name][0, 0] = 3.0
+    predictions["slot_attack"][0, 1, 2:4] = 4.0
+    predictions["slot_held"][0, 1, 4:6] = 4.0
+    predictions["slot_release"][0, 1, 6:8] = 4.0
+    for name in SLOT_BOUNDARY_NAMES:
+        predictions[name][0, 0] = -4.0
+    predictions["slot_onset"][0, :, 2] = 4.0
+    predictions["slot_attack_end"][0, :, 4] = 4.0
+    predictions["slot_release_start"][0, :, 6] = 4.0
+    predictions["slot_offset"][0, :, 8] = 4.0
+    predictions["slot_activity"] = torch.tensor([[4.0, 4.0]])
+    batch["slot_active"] = torch.stack([batch[name] for name in SLOT_PHASE_NAMES], dim=2).amax(
+        dim=2
+    )
+
+    assignments = _slot_assignments(predictions, batch)
+
+    assert assignments == [[(1, 0)]]
 
 
 def test_anonymous_slot_loss_reports_duplicate_slot_penalty() -> None:
@@ -586,8 +614,9 @@ def test_anonymous_training_checkpoint_includes_optimizer_rng_and_objective() ->
     assert checkpoint["global_step"] == 17
     assert checkpoint["best_validation_loss"] == 1.25
     assert checkpoint["rng_state"]["torch"].numel() > 0
-    assert checkpoint["objective"]["version"] == "phase_event_stable_v2"
+    assert checkpoint["objective"]["version"] == "phase_event_stable_v3"
     assert checkpoint["objective"]["weights"]["slot_event_count_loss"] == 0.0
+    assert checkpoint["objective"]["weights"]["slot_boundary_mass_loss"] == 0.25
 
 
 def test_evaluation_matching_scores_unique_duplicate_onsets_once() -> None:

@@ -35,14 +35,15 @@ SLOT_BOUNDARY_LOSS_WEIGHT = 0.35
 SLOT_EVENT_COUNT_LOSS_WEIGHT = 0.0
 SLOT_PHASE_OVERLAP_LOSS_WEIGHT = 0.10
 SLOT_UNMATCHED_OFF_LOSS_WEIGHT = 0.75
-SLOT_DUPLICATE_LOSS_WEIGHT = 0.25
+SLOT_DUPLICATE_LOSS_WEIGHT = 0.75
 SLOT_ACTIVITY_LOSS_WEIGHT = 0.05
-SLOT_MATCHED_OFF_LOSS_WEIGHT = 0.5
-SLOT_ACTIVE_DURATION_LOSS_WEIGHT = 0.25
+SLOT_MATCHED_OFF_LOSS_WEIGHT = 1.5
+SLOT_ACTIVE_DURATION_LOSS_WEIGHT = 0.75
+SLOT_BOUNDARY_MASS_LOSS_WEIGHT = 0.25
 SLOT_TVERSKY_FALSE_POSITIVE_WEIGHT = 0.7
 SLOT_TVERSKY_FALSE_NEGATIVE_WEIGHT = 0.3
-SLOT_DUPLICATE_SIMILARITY_THRESHOLD = 0.85
-ANONYMOUS_SLOT_OBJECTIVE_VERSION = "phase_event_stable_v2"
+SLOT_DUPLICATE_SIMILARITY_THRESHOLD = 0.6
+ANONYMOUS_SLOT_OBJECTIVE_VERSION = "phase_event_stable_v3"
 SLOT_PHASE_NAMES = ("slot_attack", "slot_held", "slot_release")
 SLOT_BOUNDARY_NAMES = ("slot_onset", "slot_attack_end", "slot_release_start", "slot_offset")
 SLOT_BOUNDARY_WEIGHTS = {
@@ -749,6 +750,13 @@ def compute_anonymous_slot_loss(
             pred_active_probability[batch_indices, pred_indices],
             matched_active_targets,
         )
+        boundary_mass_loss = _slot_boundary_mass_loss(
+            pred,
+            target,
+            batch_indices,
+            pred_indices,
+            target_indices,
+        )
     else:
         slot_phase_loss = zero
         slot_active_tversky_loss = zero
@@ -756,6 +764,7 @@ def compute_anonymous_slot_loss(
         event_count_loss = zero
         matched_off_loss = zero
         active_duration_loss = zero
+        boundary_mass_loss = zero
     if unmatched_batch_indices:
         batch_indices = torch.as_tensor(unmatched_batch_indices, device=pred["slot_attack"].device)
         pred_indices = torch.as_tensor(unmatched_pred_indices, device=pred["slot_attack"].device)
@@ -785,15 +794,7 @@ def compute_anonymous_slot_loss(
     else:
         unmatched_off_loss = zero
     slot_phase_overlap_loss = _slot_phase_overlap_loss(pred)
-    duplicate_loss = _slot_duplicate_loss(
-        torch.cat(
-            (
-                torch.stack([torch.sigmoid(pred[name]) for name in SLOT_PHASE_NAMES], dim=2),
-                torch.stack([torch.sigmoid(pred[name]) for name in SLOT_BOUNDARY_NAMES], dim=2),
-            ),
-            dim=2,
-        )
-    )
+    duplicate_loss = _slot_duplicate_loss(pred_active_probability)
     activity_loss = torch.nn.functional.binary_cross_entropy_with_logits(
         pred["slot_activity"],
         activity_targets,
@@ -805,6 +806,7 @@ def compute_anonymous_slot_loss(
         + SLOT_EVENT_COUNT_LOSS_WEIGHT * event_count_loss
         + SLOT_MATCHED_OFF_LOSS_WEIGHT * matched_off_loss
         + SLOT_ACTIVE_DURATION_LOSS_WEIGHT * active_duration_loss
+        + SLOT_BOUNDARY_MASS_LOSS_WEIGHT * boundary_mass_loss
         + SLOT_PHASE_OVERLAP_LOSS_WEIGHT * slot_phase_overlap_loss
         + SLOT_UNMATCHED_OFF_LOSS_WEIGHT * unmatched_off_loss
         + SLOT_DUPLICATE_LOSS_WEIGHT * duplicate_loss
@@ -819,6 +821,7 @@ def compute_anonymous_slot_loss(
         "slot_event_count_loss": event_count_loss.detach(),
         "slot_matched_off_loss": matched_off_loss.detach(),
         "slot_active_duration_loss": active_duration_loss.detach(),
+        "slot_boundary_mass_loss": boundary_mass_loss.detach(),
         "slot_phase_overlap_loss": slot_phase_overlap_loss.detach(),
         "slot_unmatched_off_loss": unmatched_off_loss.detach(),
         "slot_duplicate_loss": duplicate_loss.detach(),
@@ -929,6 +932,24 @@ def _slot_boundary_loss(
     return (torch.stack(losses) * weight_tensor).sum() / weight_tensor.sum()
 
 
+def _slot_boundary_mass_loss(
+    predictions: dict[str, Tensor],
+    targets: dict[str, Tensor],
+    batch_indices: Tensor,
+    pred_indices: Tensor,
+    target_indices: Tensor,
+) -> Tensor:
+    losses = []
+    for name in SLOT_BOUNDARY_NAMES:
+        probability = torch.sigmoid(predictions[name][batch_indices, pred_indices])
+        target = targets[name][batch_indices, target_indices].float()
+        pred_mass = probability.mean(dim=-1)
+        target_mass = target.mean(dim=-1)
+        excess_mass = torch.relu(pred_mass - target_mass * 2.0)
+        losses.append(excess_mass.mean())
+    return torch.stack(losses).mean()
+
+
 def _slot_event_count_loss(
     predictions: dict[str, Tensor],
     targets: dict[str, Tensor],
@@ -956,12 +977,12 @@ def _slot_phase_overlap_loss(predictions: dict[str, Tensor]) -> Tensor:
 
 
 def _slot_duplicate_loss(slot_tracks: Tensor) -> Tensor:
-    batch_size, slot_count, _channels, _time = slot_tracks.shape
+    batch_size, slot_count, _time = slot_tracks.shape
     if slot_count < 2:
         return slot_tracks.sum() * 0.0
     losses: list[Tensor] = []
     for batch_index in range(batch_size):
-        masks = slot_tracks[batch_index].flatten(start_dim=1)
+        masks = slot_tracks[batch_index]
         intersection = torch.minimum(masks[:, None], masks[None]).sum(dim=-1)
         union = torch.maximum(masks[:, None], masks[None]).sum(dim=-1).clamp_min(1e-6)
         similarity = intersection / union
@@ -1054,6 +1075,11 @@ def _slot_assignments(
             true_active = target_active[batch_index, active_targets]
             active_probability = pred_active[batch_index]
             phase_active_cost = _pairwise_dice_cost(active_probability, true_active)
+            inactive_cost = _pairwise_inactive_false_positive_cost(
+                active_probability,
+                true_active,
+            )
+            duration_cost = _pairwise_active_duration_cost(active_probability, true_active)
             per_phase_cost = torch.zeros(
                 slot_count, len(active_targets), dtype=active_probability.dtype
             )
@@ -1079,10 +1105,12 @@ def _slot_assignments(
                 len(active_targets),
             )
             cost = (
-                0.35 * phase_active_cost
-                + 0.35 * per_phase_cost
-                + 0.20 * boundary_cost
+                0.25 * phase_active_cost
+                + 0.25 * per_phase_cost
+                + 0.15 * boundary_cost
                 + 0.10 * activity_cost
+                + 0.15 * inactive_cost
+                + 0.10 * duration_cost
             ).clamp(0.0, 10.0)
             _require_finite_tensor(f"anonymous slot assignment cost batch {batch_index}", cost)
             pred_indices, target_columns = linear_sum_assignment(cost.numpy())
@@ -1101,6 +1129,18 @@ def _pairwise_dice_cost(prediction: Tensor, target: Tensor) -> Tensor:
     intersection = prediction @ target.transpose(0, 1)
     denominator = prediction.sum(dim=-1, keepdim=True) + target.sum(dim=-1)[None] + 1e-6
     return (1.0 - (2.0 * intersection + 1e-6) / denominator).clamp(0.0, 1.0)
+
+
+def _pairwise_inactive_false_positive_cost(prediction: Tensor, target: Tensor) -> Tensor:
+    inactive_target = 1.0 - target
+    inactive_frames = inactive_target.sum(dim=-1).clamp_min(1e-6)
+    return ((prediction @ inactive_target.transpose(0, 1)) / inactive_frames[None]).clamp(0.0, 1.0)
+
+
+def _pairwise_active_duration_cost(prediction: Tensor, target: Tensor) -> Tensor:
+    pred_duration = prediction.mean(dim=-1, keepdim=True)
+    target_duration = target.mean(dim=-1)[None]
+    return (pred_duration - target_duration).abs().clamp(0.0, 1.0)
 
 
 def train_model(
@@ -1301,6 +1341,7 @@ def _objective_metadata(target: TrainingTarget) -> dict[str, object]:
             "slot_event_count_loss": SLOT_EVENT_COUNT_LOSS_WEIGHT,
             "slot_matched_off_loss": SLOT_MATCHED_OFF_LOSS_WEIGHT,
             "slot_active_duration_loss": SLOT_ACTIVE_DURATION_LOSS_WEIGHT,
+            "slot_boundary_mass_loss": SLOT_BOUNDARY_MASS_LOSS_WEIGHT,
             "slot_phase_overlap_loss": SLOT_PHASE_OVERLAP_LOSS_WEIGHT,
             "slot_unmatched_off_loss": SLOT_UNMATCHED_OFF_LOSS_WEIGHT,
             "slot_duplicate_loss": SLOT_DUPLICATE_LOSS_WEIGHT,
