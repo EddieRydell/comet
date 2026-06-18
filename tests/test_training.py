@@ -729,6 +729,47 @@ def test_resume_restores_model_optimizer_rng_and_supports_lr_override(tmp_path: 
     assert float(np.random.random()) == pytest.approx(expected_numpy_random)
 
 
+def test_resume_resets_best_validation_when_objective_changes(tmp_path: Path) -> None:
+    model = torch.nn.Linear(2, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    checkpoint = _training_checkpoint_payload(
+        model=model,
+        optimizer=optimizer,
+        epoch=4,
+        global_step=19,
+        best_validation_loss=0.75,
+        target="anonymous_slots_v1",
+        max_tracks=2,
+        crop_seconds=0.5,
+        early_stop_bad_epochs=3,
+    )
+    checkpoint["objective"] = {
+        "name": "anonymous_slots_v1",
+        "version": "phase_event_off_phase_v1",
+    }
+    checkpoint_path = tmp_path / "resume.pt"
+    torch.save(checkpoint, checkpoint_path)
+
+    restored_model = torch.nn.Linear(2, 1)
+    restored_optimizer = torch.optim.AdamW(restored_model.parameters(), lr=3e-4)
+    state = _restore_training_state(
+        resume=checkpoint_path,
+        model=restored_model,
+        optimizer=restored_optimizer,
+        scheduler=None,
+        target="anonymous_slots_v1",
+        architecture="slot_attention_phase_event_v1",
+        max_tracks=2,
+        resume_learning_rate=5e-5,
+        device=torch.device("cpu"),
+    )
+
+    assert state["epoch"] == 4
+    assert state["global_step"] == 19
+    assert math.isinf(state["best_validation_loss"])
+    assert state["early_stop_bad_epochs"] == 0
+
+
 def test_resume_rejects_mismatched_target_or_architecture(tmp_path: Path) -> None:
     model = torch.nn.Linear(2, 1)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)

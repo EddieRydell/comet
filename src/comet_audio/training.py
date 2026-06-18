@@ -1256,6 +1256,10 @@ def _is_improved(value: float, best: float, min_delta: object) -> bool:
     return value < best - float(min_delta)
 
 
+def _same_objective(checkpoint: dict[str, object], target: TrainingTarget) -> bool:
+    return checkpoint.get("objective") == _objective_metadata(target)
+
+
 def _restore_training_state(
     resume: Path,
     model: nn.Module,
@@ -1295,7 +1299,8 @@ def _restore_training_state(
         optimizer.load_state_dict(checkpoint["optimizer"])
     except (KeyError, ValueError, RuntimeError) as error:
         raise ValueError(f"Resume checkpoint optimizer state is incompatible: {error}") from error
-    if scheduler is not None and checkpoint.get("scheduler") is not None:
+    same_objective = _same_objective(checkpoint, target)
+    if scheduler is not None and checkpoint.get("scheduler") is not None and same_objective:
         scheduler.load_state_dict(checkpoint["scheduler"])
     if resume_learning_rate is not None:
         _set_optimizer_learning_rate(optimizer, resume_learning_rate)
@@ -1305,8 +1310,12 @@ def _restore_training_state(
     return {
         "epoch": int(checkpoint.get("epoch", 0)),
         "global_step": int(checkpoint.get("global_step", 0)),
-        "best_validation_loss": float(checkpoint.get("best_validation_loss", math.inf)),
-        "early_stop_bad_epochs": int(checkpoint.get("early_stop_bad_epochs", 0)),
+        "best_validation_loss": (
+            float(checkpoint.get("best_validation_loss", math.inf)) if same_objective else math.inf
+        ),
+        "early_stop_bad_epochs": (
+            int(checkpoint.get("early_stop_bad_epochs", 0)) if same_objective else 0
+        ),
     }
 
 
