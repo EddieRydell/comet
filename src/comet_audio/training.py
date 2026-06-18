@@ -42,10 +42,15 @@ SLOT_ACTIVE_DURATION_LOSS_WEIGHT = 1.0
 SLOT_BOUNDARY_MASS_LOSS_WEIGHT = 0.1
 SLOT_DURATION_UNDERACTIVE_WEIGHT = 2.0
 SLOT_DURATION_OVERACTIVE_WEIGHT = 0.5
-SLOT_TVERSKY_FALSE_POSITIVE_WEIGHT = 0.7
-SLOT_TVERSKY_FALSE_NEGATIVE_WEIGHT = 0.3
+SLOT_TVERSKY_FALSE_POSITIVE_WEIGHT = 0.4
+SLOT_TVERSKY_FALSE_NEGATIVE_WEIGHT = 0.6
 SLOT_DUPLICATE_SIMILARITY_THRESHOLD = 0.6
-ANONYMOUS_SLOT_OBJECTIVE_VERSION = "phase_event_off_phase_v1"
+ANONYMOUS_SLOT_OBJECTIVE_VERSION = "phase_event_off_phase_recall_v1"
+ANONYMOUS_SLOT_LR_PLATEAU_PATIENCE = 2
+ANONYMOUS_SLOT_LR_PLATEAU_FACTOR = 0.25
+ANONYMOUS_SLOT_MIN_LEARNING_RATE = 5e-5
+ANONYMOUS_SLOT_EARLY_STOPPING_PATIENCE = 8
+ANONYMOUS_SLOT_IMPROVEMENT_MIN_DELTA = 1e-3
 SLOT_PHASE_NAMES = ("slot_attack", "slot_held", "slot_release")
 SLOT_BOUNDARY_NAMES = ("slot_onset", "slot_attack_end", "slot_release_start", "slot_offset")
 SLOT_BOUNDARY_WEIGHTS = {
@@ -749,7 +754,7 @@ def compute_anonymous_slot_loss(
             pred_active_probability[batch_indices, pred_indices],
             matched_active_targets,
         )
-        active_duration_loss = _active_duration_ratio_loss(
+        active_duration_loss = _active_duration_weighted_linear_loss(
             pred_active_probability[batch_indices, pred_indices],
             matched_active_targets,
         )
@@ -927,17 +932,16 @@ def _matched_slot_off_loss(active_probability: Tensor, active_targets: Tensor) -
     return -torch.log1p(-inactive_probability).mean()
 
 
-def _active_duration_ratio_loss(active_probability: Tensor, active_targets: Tensor) -> Tensor:
+def _active_duration_weighted_linear_loss(
+    active_probability: Tensor, active_targets: Tensor
+) -> Tensor:
     predicted_duration = active_probability.mean(dim=-1)
     target_duration = active_targets.float().mean(dim=-1)
     underactive = torch.relu(target_duration - predicted_duration)
     overactive = torch.relu(predicted_duration - target_duration)
-    return SLOT_DURATION_UNDERACTIVE_WEIGHT * torch.nn.functional.smooth_l1_loss(
-        underactive,
-        torch.zeros_like(underactive),
-    ) + SLOT_DURATION_OVERACTIVE_WEIGHT * torch.nn.functional.smooth_l1_loss(
-        overactive,
-        torch.zeros_like(overactive),
+    return (
+        SLOT_DURATION_UNDERACTIVE_WEIGHT * underactive.mean()
+        + SLOT_DURATION_OVERACTIVE_WEIGHT * overactive.mean()
     )
 
 
@@ -1177,6 +1181,161 @@ def _pairwise_active_duration_cost(prediction: Tensor, target: Tensor) -> Tensor
     return (pred_duration - target_duration).abs().clamp(0.0, 1.0)
 
 
+def _training_architecture(target: TrainingTarget) -> str:
+    return "slot_attention_phase_event_v1" if target == "anonymous_slots_v1" else "cnn_tcn_v1"
+
+
+def _resolve_training_schedule(
+    target: TrainingTarget,
+    lr_plateau_patience: int | None,
+    lr_plateau_factor: float | None,
+    min_learning_rate: float | None,
+    early_stopping_patience: int | None,
+    improvement_min_delta: float | None,
+) -> dict[str, object]:
+    if target == "anonymous_slots_v1":
+        return {
+            "lr_plateau_patience": (
+                ANONYMOUS_SLOT_LR_PLATEAU_PATIENCE
+                if lr_plateau_patience is None
+                else lr_plateau_patience
+            ),
+            "lr_plateau_factor": (
+                ANONYMOUS_SLOT_LR_PLATEAU_FACTOR if lr_plateau_factor is None else lr_plateau_factor
+            ),
+            "min_learning_rate": (
+                ANONYMOUS_SLOT_MIN_LEARNING_RATE if min_learning_rate is None else min_learning_rate
+            ),
+            "early_stopping_patience": (
+                ANONYMOUS_SLOT_EARLY_STOPPING_PATIENCE
+                if early_stopping_patience is None
+                else early_stopping_patience
+            ),
+            "improvement_min_delta": (
+                ANONYMOUS_SLOT_IMPROVEMENT_MIN_DELTA
+                if improvement_min_delta is None
+                else improvement_min_delta
+            ),
+        }
+    return {
+        "lr_plateau_patience": lr_plateau_patience,
+        "lr_plateau_factor": lr_plateau_factor,
+        "min_learning_rate": 0.0 if min_learning_rate is None else min_learning_rate,
+        "early_stopping_patience": early_stopping_patience,
+        "improvement_min_delta": 0.0 if improvement_min_delta is None else improvement_min_delta,
+    }
+
+
+def _build_lr_scheduler(
+    optimizer: torch.optim.Optimizer,
+    schedule: dict[str, object],
+) -> torch.optim.lr_scheduler.ReduceLROnPlateau | None:
+    patience = schedule["lr_plateau_patience"]
+    factor = schedule["lr_plateau_factor"]
+    if patience is None or factor is None:
+        return None
+    return torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=float(factor),
+        patience=int(patience),
+        min_lr=float(schedule["min_learning_rate"]),
+    )
+
+
+def _current_learning_rate(optimizer: torch.optim.Optimizer) -> float:
+    return float(optimizer.param_groups[0]["lr"])
+
+
+def _set_optimizer_learning_rate(optimizer: torch.optim.Optimizer, learning_rate: float) -> None:
+    for group in optimizer.param_groups:
+        group["lr"] = learning_rate
+
+
+def _is_improved(value: float, best: float, min_delta: object) -> bool:
+    return value < best - float(min_delta)
+
+
+def _restore_training_state(
+    resume: Path,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.ReduceLROnPlateau | None,
+    target: TrainingTarget,
+    architecture: str,
+    max_tracks: int,
+    resume_learning_rate: float | None,
+    device: torch.device,
+) -> dict[str, int | float]:
+    checkpoint = torch.load(resume, map_location=device, weights_only=False)
+    checkpoint_target = checkpoint.get("target")
+    if checkpoint_target != target:
+        raise ValueError(
+            f"Resume checkpoint target {checkpoint_target!r} does not match {target!r}"
+        )
+    checkpoint_architecture = checkpoint.get("architecture")
+    if checkpoint_architecture != architecture:
+        raise ValueError(
+            "Resume checkpoint architecture "
+            f"{checkpoint_architecture!r} does not match {architecture!r}"
+        )
+    if (
+        target == "anonymous_slots_v1"
+        and int(checkpoint.get("max_tracks", max_tracks)) != max_tracks
+    ):
+        raise ValueError(
+            f"Resume checkpoint max_tracks {checkpoint.get('max_tracks')!r} does not match "
+            f"{max_tracks!r}"
+        )
+    try:
+        model.load_state_dict(checkpoint["model"])
+    except RuntimeError as error:
+        raise ValueError(f"Resume checkpoint model state is incompatible: {error}") from error
+    try:
+        optimizer.load_state_dict(checkpoint["optimizer"])
+    except (KeyError, ValueError, RuntimeError) as error:
+        raise ValueError(f"Resume checkpoint optimizer state is incompatible: {error}") from error
+    if scheduler is not None and checkpoint.get("scheduler") is not None:
+        scheduler.load_state_dict(checkpoint["scheduler"])
+    if resume_learning_rate is not None:
+        _set_optimizer_learning_rate(optimizer, resume_learning_rate)
+    rng_state = checkpoint.get("rng_state")
+    if isinstance(rng_state, dict):
+        _restore_rng_state(rng_state)
+    return {
+        "epoch": int(checkpoint.get("epoch", 0)),
+        "global_step": int(checkpoint.get("global_step", 0)),
+        "best_validation_loss": float(checkpoint.get("best_validation_loss", math.inf)),
+        "early_stop_bad_epochs": int(checkpoint.get("early_stop_bad_epochs", 0)),
+    }
+
+
+def _restore_rng_state(state: dict[str, object]) -> None:
+    if "python" in state:
+        random.setstate(state["python"])  # type: ignore[arg-type]
+    numpy_state = state.get("numpy")
+    if isinstance(numpy_state, dict):
+        np.random.set_state(
+            (
+                str(numpy_state["bit_generator"]),
+                numpy_state["state"],  # type: ignore[arg-type]
+                int(numpy_state["position"]),
+                int(numpy_state["has_gauss"]),
+                float(numpy_state["cached_gaussian"]),
+            )
+        )
+    if isinstance(state.get("torch"), Tensor):
+        torch.set_rng_state(state["torch"].cpu())  # type: ignore[union-attr]
+    if torch.cuda.is_available() and isinstance(state.get("cuda"), list):
+        cuda_states = [
+            value.detach().cpu().to(dtype=torch.uint8)
+            for value in state["cuda"]
+            if isinstance(value, Tensor)
+        ]
+        if cuda_states:
+            torch.cuda.set_rng_state_all(cuda_states)
+
+
 def train_model(
     data_dir: Path,
     run_dir: Path,
@@ -1188,6 +1347,13 @@ def train_model(
     target: TrainingTarget = "source_types_v1",
     max_tracks: int = 16,
     crop_seconds: float = TRAIN_CROP_SECONDS,
+    resume: Path | None = None,
+    resume_learning_rate: float | None = None,
+    lr_plateau_patience: int | None = None,
+    lr_plateau_factor: float | None = None,
+    min_learning_rate: float | None = None,
+    early_stopping_patience: int | None = None,
+    improvement_min_delta: float | None = None,
 ) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1232,12 +1398,39 @@ def train_model(
     else:
         model = CNNTCNTimingModel().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    schedule = _resolve_training_schedule(
+        target=target,
+        lr_plateau_patience=lr_plateau_patience,
+        lr_plateau_factor=lr_plateau_factor,
+        min_learning_rate=min_learning_rate,
+        early_stopping_patience=early_stopping_patience,
+        improvement_min_delta=improvement_min_delta,
+    )
+    scheduler = _build_lr_scheduler(optimizer, schedule)
     scaler = torch.amp.GradScaler("cuda", enabled=False)
     best_val = math.inf
     global_step = 0
+    start_epoch = 1
+    early_stop_bad_epochs = 0
+    if resume is not None:
+        resume_state = _restore_training_state(
+            resume=resume,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            target=target,
+            architecture=_training_architecture(target),
+            max_tracks=max_tracks,
+            resume_learning_rate=resume_learning_rate,
+            device=device,
+        )
+        start_epoch = resume_state["epoch"] + 1
+        global_step = resume_state["global_step"]
+        best_val = resume_state["best_validation_loss"]
+        early_stop_bad_epochs = resume_state["early_stop_bad_epochs"]
     metrics_path = run_dir / "metrics.jsonl"
 
-    for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, start_epoch + epochs):
         train_metrics, global_step = _run_epoch(
             model,
             train_loader,
@@ -1262,18 +1455,36 @@ def train_model(
             epoch=epoch,
             global_step=global_step,
         )
-        row = {"epoch": epoch, "train": train_metrics, "val": val_metrics}
-        with metrics_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row, sort_keys=True) + "\n")
-        is_best = val_metrics["loss"] < best_val
+        is_best = _is_improved(
+            val_metrics["loss"],
+            best_val,
+            min_delta=schedule["improvement_min_delta"],
+        )
         if is_best:
             best_val = val_metrics["loss"]
+            early_stop_bad_epochs = 0
+        else:
+            early_stop_bad_epochs += 1
+        if scheduler is not None:
+            scheduler.step(val_metrics["loss"])
+        row = {
+            "epoch": epoch,
+            "train": train_metrics,
+            "val": val_metrics,
+            "learning_rate": _current_learning_rate(optimizer),
+            "best_validation_loss": best_val,
+        }
+        with metrics_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
         checkpoint = _training_checkpoint_payload(
             model=model,
             optimizer=optimizer,
+            scheduler=scheduler,
+            schedule=schedule,
             epoch=epoch,
             global_step=global_step,
             best_validation_loss=best_val,
+            early_stop_bad_epochs=early_stop_bad_epochs,
             target=target,
             max_tracks=max_tracks,
             crop_seconds=crop_seconds,
@@ -1281,6 +1492,9 @@ def train_model(
         torch.save(checkpoint, run_dir / "last.pt")
         if is_best:
             torch.save(checkpoint, run_dir / "best.pt")
+        patience = schedule["early_stopping_patience"]
+        if patience is not None and early_stop_bad_epochs >= patience:
+            break
 
 
 def _run_epoch(
@@ -1375,9 +1589,12 @@ def _objective_metadata(target: TrainingTarget) -> dict[str, object]:
             "slot_event_count_loss": SLOT_EVENT_COUNT_LOSS_WEIGHT,
             "slot_matched_off_loss": SLOT_MATCHED_OFF_LOSS_WEIGHT,
             "slot_active_duration_loss": SLOT_ACTIVE_DURATION_LOSS_WEIGHT,
+            "slot_active_duration_loss_type": "weighted_linear",
             "slot_boundary_mass_loss": SLOT_BOUNDARY_MASS_LOSS_WEIGHT,
             "slot_duration_underactive": SLOT_DURATION_UNDERACTIVE_WEIGHT,
             "slot_duration_overactive": SLOT_DURATION_OVERACTIVE_WEIGHT,
+            "slot_tversky_false_positive": SLOT_TVERSKY_FALSE_POSITIVE_WEIGHT,
+            "slot_tversky_false_negative": SLOT_TVERSKY_FALSE_NEGATIVE_WEIGHT,
             "slot_phase_classes": ("off", "attack", "held", "release"),
             "slot_phase_overlap_loss": SLOT_PHASE_OVERLAP_LOSS_WEIGHT,
             "slot_unmatched_off_loss": SLOT_UNMATCHED_OFF_LOSS_WEIGHT,
@@ -1396,17 +1613,29 @@ def _training_checkpoint_payload(
     target: TrainingTarget,
     max_tracks: int,
     crop_seconds: float,
+    scheduler: torch.optim.lr_scheduler.ReduceLROnPlateau | None = None,
+    schedule: dict[str, object] | None = None,
+    early_stop_bad_epochs: int = 0,
 ) -> dict[str, object]:
     return {
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
+        "scheduler": None if scheduler is None else scheduler.state_dict(),
+        "schedule": schedule
+        or _resolve_training_schedule(
+            target=target,
+            lr_plateau_patience=None,
+            lr_plateau_factor=None,
+            min_learning_rate=None,
+            early_stopping_patience=None,
+            improvement_min_delta=None,
+        ),
         "epoch": epoch,
         "global_step": global_step,
         "best_validation_loss": best_validation_loss,
+        "early_stop_bad_epochs": early_stop_bad_epochs,
         "target": target,
-        "architecture": (
-            "slot_attention_phase_event_v1" if target == "anonymous_slots_v1" else "cnn_tcn_v1"
-        ),
+        "architecture": _training_architecture(target),
         "objective": _objective_metadata(target),
         "rng_state": _rng_state(),
         "source_types": [] if target == "anonymous_slots_v1" else SOURCE_TYPES,

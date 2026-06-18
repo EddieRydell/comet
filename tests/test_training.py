@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import math
+import random
 from pathlib import Path
 
+import numpy as np
 import pytest
 import soundfile as sf
 import torch
@@ -34,7 +36,15 @@ from comet_audio.training import (
     TrainingClipMetadata,
     TrainingEventMetadata,
     TrainingSourceMetadata,
+    _active_duration_weighted_linear_loss,
+    _active_tversky_loss,
+    _build_lr_scheduler,
+    _current_learning_rate,
+    _is_improved,
     _require_finite_model_gradients,
+    _resolve_training_schedule,
+    _restore_rng_state,
+    _restore_training_state,
     _slot_assignments,
     _training_checkpoint_payload,
     build_anonymous_slot_targets,
@@ -641,17 +651,211 @@ def test_anonymous_training_checkpoint_includes_optimizer_rng_and_objective() ->
     assert checkpoint["global_step"] == 17
     assert checkpoint["best_validation_loss"] == 1.25
     assert checkpoint["rng_state"]["torch"].numel() > 0
-    assert checkpoint["objective"]["version"] == "phase_event_off_phase_v1"
+    assert checkpoint["objective"]["version"] == "phase_event_off_phase_recall_v1"
     assert checkpoint["objective"]["weights"]["slot_event_count_loss"] == 0.0
     assert checkpoint["objective"]["weights"]["slot_boundary_mass_loss"] == 0.1
     assert checkpoint["objective"]["weights"]["slot_duration_underactive"] == 2.0
     assert checkpoint["objective"]["weights"]["slot_duration_overactive"] == 0.5
+    assert checkpoint["objective"]["weights"]["slot_active_duration_loss_type"] == "weighted_linear"
+    assert checkpoint["objective"]["weights"]["slot_tversky_false_positive"] == 0.4
+    assert checkpoint["objective"]["weights"]["slot_tversky_false_negative"] == 0.6
     assert checkpoint["objective"]["weights"]["slot_phase_classes"] == (
         "off",
         "attack",
         "held",
         "release",
     )
+    assert checkpoint["schedule"]["lr_plateau_patience"] == 2
+    assert checkpoint["schedule"]["lr_plateau_factor"] == 0.25
+    assert checkpoint["schedule"]["min_learning_rate"] == 5e-5
+    assert checkpoint["schedule"]["early_stopping_patience"] == 8
+    assert checkpoint["schedule"]["improvement_min_delta"] == 1e-3
+
+
+def test_resume_restores_model_optimizer_rng_and_supports_lr_override(tmp_path: Path) -> None:
+    torch.manual_seed(123)
+    np.random.seed(123)
+    random.seed(123)
+    model = torch.nn.Linear(2, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    with torch.no_grad():
+        model.weight.fill_(0.75)
+        model.bias.fill_(-0.25)
+    (model(torch.ones(1, 2)).sum()).backward()
+    optimizer.step()
+    expected_weight = model.weight.detach().clone()
+    expected_bias = model.bias.detach().clone()
+    expected_torch_state = torch.get_rng_state().clone()
+    checkpoint = _training_checkpoint_payload(
+        model=model,
+        optimizer=optimizer,
+        epoch=4,
+        global_step=19,
+        best_validation_loss=0.75,
+        target="source_types_v1",
+        max_tracks=2,
+        crop_seconds=0.5,
+    )
+    expected_python_random = random.random()
+    expected_numpy_random = float(np.random.random())
+    checkpoint_path = tmp_path / "resume.pt"
+    torch.save(checkpoint, checkpoint_path)
+
+    torch.manual_seed(999)
+    np.random.seed(999)
+    random.seed(999)
+    restored_model = torch.nn.Linear(2, 1)
+    restored_optimizer = torch.optim.AdamW(restored_model.parameters(), lr=3e-4)
+    state = _restore_training_state(
+        resume=checkpoint_path,
+        model=restored_model,
+        optimizer=restored_optimizer,
+        scheduler=None,
+        target="source_types_v1",
+        architecture="cnn_tcn_v1",
+        max_tracks=2,
+        resume_learning_rate=5e-5,
+        device=torch.device("cpu"),
+    )
+
+    assert state["epoch"] == 4
+    assert state["global_step"] == 19
+    assert state["best_validation_loss"] == 0.75
+    assert torch.equal(restored_model.weight, expected_weight)
+    assert torch.equal(restored_model.bias, expected_bias)
+    assert _current_learning_rate(restored_optimizer) == pytest.approx(5e-5)
+    assert torch.equal(torch.get_rng_state(), expected_torch_state)
+    assert random.random() == pytest.approx(expected_python_random)
+    assert float(np.random.random()) == pytest.approx(expected_numpy_random)
+
+
+def test_resume_rejects_mismatched_target_or_architecture(tmp_path: Path) -> None:
+    model = torch.nn.Linear(2, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    checkpoint = _training_checkpoint_payload(
+        model=model,
+        optimizer=optimizer,
+        epoch=1,
+        global_step=1,
+        best_validation_loss=1.0,
+        target="source_types_v1",
+        max_tracks=2,
+        crop_seconds=0.5,
+    )
+    checkpoint_path = tmp_path / "resume.pt"
+    torch.save(checkpoint, checkpoint_path)
+
+    with pytest.raises(ValueError, match="target"):
+        _restore_training_state(
+            resume=checkpoint_path,
+            model=torch.nn.Linear(2, 1),
+            optimizer=torch.optim.AdamW(model.parameters(), lr=1e-4),
+            scheduler=None,
+            target="anonymous_slots_v1",
+            architecture="slot_attention_phase_event_v1",
+            max_tracks=2,
+            resume_learning_rate=None,
+            device=torch.device("cpu"),
+        )
+
+    checkpoint["target"] = "anonymous_slots_v1"
+    checkpoint["architecture"] = "slot_attention_event_v1"
+    checkpoint["max_tracks"] = 2
+    torch.save(checkpoint, checkpoint_path)
+    with pytest.raises(ValueError, match="architecture"):
+        _restore_training_state(
+            resume=checkpoint_path,
+            model=torch.nn.Linear(2, 1),
+            optimizer=torch.optim.AdamW(model.parameters(), lr=1e-4),
+            scheduler=None,
+            target="anonymous_slots_v1",
+            architecture="slot_attention_phase_event_v1",
+            max_tracks=2,
+            resume_learning_rate=None,
+            device=torch.device("cpu"),
+        )
+
+
+def test_restore_rng_state_normalizes_cuda_rng_tensors(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[list[torch.Tensor]] = []
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "set_rng_state_all", lambda states: captured.append(states))
+
+    _restore_rng_state({"cuda": [torch.arange(4, dtype=torch.int64)]})
+
+    assert len(captured) == 1
+    assert captured[0][0].device.type == "cpu"
+    assert captured[0][0].dtype == torch.uint8
+
+
+def test_plateau_scheduler_lowers_lr_and_respects_min_learning_rate() -> None:
+    model = torch.nn.Linear(1, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    schedule = _resolve_training_schedule(
+        target="anonymous_slots_v1",
+        lr_plateau_patience=0,
+        lr_plateau_factor=0.25,
+        min_learning_rate=2e-4,
+        early_stopping_patience=None,
+        improvement_min_delta=None,
+    )
+    scheduler = _build_lr_scheduler(optimizer, schedule)
+    assert scheduler is not None
+
+    scheduler.step(1.0)
+    scheduler.step(1.0)
+    scheduler.step(1.0)
+    scheduler.step(1.0)
+
+    assert _current_learning_rate(optimizer) == pytest.approx(2e-4)
+
+
+def test_early_stopping_patience_triggers_after_configured_bad_epochs() -> None:
+    best = 1.0
+    patience = 2
+    bad_epochs = 0
+    stopped_at = None
+    for epoch, value in enumerate([0.9995, 0.9994, 0.997], start=1):
+        if _is_improved(value, best, min_delta=1e-3):
+            best = value
+            bad_epochs = 0
+        else:
+            bad_epochs += 1
+        if bad_epochs >= patience:
+            stopped_at = epoch
+            break
+
+    assert stopped_at == 2
+
+
+def test_underactive_duration_is_penalized_more_than_equivalent_overactive() -> None:
+    target = torch.zeros(2, 10)
+    target[0, :5] = 1.0
+    target[1, :5] = 1.0
+    underactive = target.clone()
+    underactive[0, :2] = 0.0
+    overactive = target.clone()
+    overactive[1, 5:7] = 1.0
+
+    underactive_loss = _active_duration_weighted_linear_loss(underactive[:1], target[:1])
+    overactive_loss = _active_duration_weighted_linear_loss(overactive[1:], target[1:])
+
+    assert underactive_loss > overactive_loss
+
+
+def test_active_tversky_penalizes_missed_active_frames_more_than_false_positives() -> None:
+    target = torch.zeros(1, 10)
+    target[:, :5] = 1.0
+    missed_active = target.clone()
+    missed_active[:, :2] = 0.0
+    false_positive = target.clone()
+    false_positive[:, 5:7] = 1.0
+
+    missed_loss = _active_tversky_loss(missed_active, target)
+    false_positive_loss = _active_tversky_loss(false_positive, target)
+
+    assert missed_loss > false_positive_loss
 
 
 def test_evaluation_matching_scores_unique_duplicate_onsets_once() -> None:

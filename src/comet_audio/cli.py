@@ -618,6 +618,34 @@ def train(
         float,
         typer.Option(min=0.1, help="Training crop length in seconds."),
     ] = 4.0,
+    resume: Annotated[
+        Path | None,
+        typer.Option(help="Checkpoint path to resume from."),
+    ] = None,
+    resume_learning_rate: Annotated[
+        float | None,
+        typer.Option(min=1e-7, help="Override optimizer learning rate after resume."),
+    ] = None,
+    lr_plateau_patience: Annotated[
+        int | None,
+        typer.Option(min=0, help="Validation plateau epochs before reducing learning rate."),
+    ] = None,
+    lr_plateau_factor: Annotated[
+        float | None,
+        typer.Option(min=1e-6, max=0.999, help="Learning-rate multiplier on plateau."),
+    ] = None,
+    min_learning_rate: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="Minimum learning rate for plateau decay."),
+    ] = None,
+    early_stopping_patience: Annotated[
+        int | None,
+        typer.Option(min=1, help="Validation non-improvement epochs before stopping."),
+    ] = None,
+    improvement_min_delta: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="Minimum validation loss improvement."),
+    ] = None,
 ) -> None:
     """Train the CNN+TCN V1 global event-timing detector."""
     if target not in {"source_types_v1", "anonymous_slots_v1"}:
@@ -633,6 +661,13 @@ def train(
         target=target,  # type: ignore[arg-type]
         max_tracks=max_tracks,
         crop_seconds=crop_seconds,
+        resume=resume,
+        resume_learning_rate=resume_learning_rate,
+        lr_plateau_patience=lr_plateau_patience,
+        lr_plateau_factor=lr_plateau_factor,
+        min_learning_rate=min_learning_rate,
+        early_stopping_patience=early_stopping_patience,
+        improvement_min_delta=improvement_min_delta,
     )
     typer.echo(f"Training complete. Checkpoints and metrics written to {run}")
 
