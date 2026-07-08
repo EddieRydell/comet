@@ -1,0 +1,2180 @@
+{
+  "beat_unit": 4,
+  "beats_per_measure": 5,
+  "bpm": 75.0,
+  "dataset_version": "comet-edm-v1",
+  "duration_seconds": 8.0,
+  "events": [
+    {
+      "attack_seconds": 0.08651,
+      "event_id": "event_0006",
+      "event_type": "string_stab",
+      "midi_note": 65,
+      "offset_seconds": 5.52018,
+      "onset_seconds": 0.0,
+      "release_seconds": 0.63367,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 6.900225,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 1,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -2.09939,
+          "filter_scale": 0.85305,
+          "transient_scale": 0.9715
+        }
+      },
+      "source_id": "source_001",
+      "velocity": 0.6777
+    },
+    {
+      "attack_seconds": 0.10071,
+      "event_id": "event_0007",
+      "event_type": "string_stab",
+      "midi_note": 62,
+      "offset_seconds": 3.74669,
+      "onset_seconds": 0.0,
+      "release_seconds": 0.44598,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 4.683362,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 1,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -0.03117,
+          "filter_scale": 0.82685,
+          "transient_scale": 0.75539
+        }
+      },
+      "source_id": "source_002",
+      "velocity": 0.9032
+    },
+    {
+      "attack_seconds": 0.16714,
+      "event_id": "event_0010",
+      "event_type": "synth_pluck",
+      "midi_note": 65,
+      "offset_seconds": 0.575963,
+      "onset_seconds": 0.0,
+      "release_seconds": 0.2074,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.719954,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 6,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -0.2563,
+          "filter_scale": 0.79176,
+          "transient_scale": 0.86724
+        }
+      },
+      "source_id": "source_004",
+      "velocity": 0.8534
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0023",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 0.097392,
+      "onset_seconds": 0.0,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 0.98716,
+          "highpass_scale": 0.78879
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.7904
+    },
+    {
+      "attack_seconds": 0.14792,
+      "event_id": "event_0054",
+      "event_type": "string_stab",
+      "midi_note": 57,
+      "offset_seconds": 2.88163,
+      "onset_seconds": 0.0,
+      "release_seconds": 0.33371,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 3.602038,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 1,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -1.33654,
+          "filter_scale": 0.70454,
+          "transient_scale": 0.91777
+        }
+      },
+      "source_id": "source_008",
+      "velocity": 0.6485
+    },
+    {
+      "attack_seconds": 0.02102,
+      "event_id": "event_0056",
+      "event_type": "pad_chord",
+      "midi_note": 70,
+      "offset_seconds": 2.22412,
+      "onset_seconds": 0.0,
+      "release_seconds": 0.6031,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 2.78015,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 1,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 0.29503,
+          "filter_scale": 0.87918,
+          "transient_scale": 0.85855
+        }
+      },
+      "source_id": "source_009",
+      "velocity": 0.6737
+    },
+    {
+      "attack_seconds": 0.06614,
+      "event_id": "event_0063",
+      "event_type": "piano",
+      "midi_note": 55,
+      "offset_seconds": 1.016642,
+      "onset_seconds": 0.0,
+      "release_seconds": 0.49563,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.270803,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 4,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -2.33842,
+          "filter_scale": 0.69374,
+          "transient_scale": 0.83883
+        }
+      },
+      "source_id": "source_011",
+      "velocity": 0.8897
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0024",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 0.364059,
+      "onset_seconds": 0.266667,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 0.91298,
+          "highpass_scale": 0.82254
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.8153
+    },
+    {
+      "attack_seconds": 0.06788,
+      "event_id": "event_0059",
+      "event_type": "guitar_pluck",
+      "midi_note": 50,
+      "offset_seconds": 1.329362,
+      "onset_seconds": 0.4,
+      "release_seconds": 0.39431,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.161703,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 2,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -2.68457,
+          "filter_scale": 0.88585,
+          "transient_scale": 0.93239
+        }
+      },
+      "source_id": "source_010",
+      "velocity": 0.9667
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0025",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 0.630725,
+      "onset_seconds": 0.533333,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 0.87348,
+          "highpass_scale": 0.79942
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.8262
+    },
+    {
+      "attack_seconds": 0.16714,
+      "event_id": "event_0011",
+      "event_type": "synth_pluck",
+      "midi_note": 60,
+      "offset_seconds": 1.24263,
+      "onset_seconds": 0.666667,
+      "release_seconds": 0.2074,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.719954,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 6,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -1.79835,
+          "filter_scale": 0.90559,
+          "transient_scale": 0.82707
+        }
+      },
+      "source_id": "source_004",
+      "velocity": 0.9184
+    },
+    {
+      "attack_seconds": 0.13006,
+      "event_id": "event_0000",
+      "event_type": "synth_lead",
+      "midi_note": 60,
+      "offset_seconds": 1.876319,
+      "onset_seconds": 0.8,
+      "release_seconds": 0.54027,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.345398,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 2,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 0.53478,
+          "filter_scale": 0.92792,
+          "transient_scale": 1.04085
+        }
+      },
+      "source_id": "source_000",
+      "velocity": 0.9143
+    },
+    {
+      "attack_seconds": 0.16138,
+      "event_id": "event_0019",
+      "event_type": "piano",
+      "midi_note": 60,
+      "offset_seconds": 2.184457,
+      "onset_seconds": 0.8,
+      "release_seconds": 0.10916,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.730572,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 2,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -2.00457,
+          "filter_scale": 0.71705,
+          "transient_scale": 0.97512
+        }
+      },
+      "source_id": "source_005",
+      "velocity": 0.7994
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0026",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 0.897392,
+      "onset_seconds": 0.8,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 0.89054,
+          "highpass_scale": 0.97108
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.89
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0050",
+      "event_type": "snare",
+      "midi_note": null,
+      "offset_seconds": 1.08,
+      "onset_seconds": 0.8,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.35,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 4,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "body_tone_scale": 0.98783,
+          "noise_tone_scale": 0.93087
+        }
+      },
+      "source_id": "source_007",
+      "velocity": 0.9844
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0027",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 1.164059,
+      "onset_seconds": 1.066667,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 0.9638,
+          "highpass_scale": 0.84364
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.7234
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0028",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 1.430725,
+      "onset_seconds": 1.333333,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 0.85797,
+          "highpass_scale": 0.90184
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.6839
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0029",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 1.697392,
+      "onset_seconds": 1.6,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 0.97698,
+          "highpass_scale": 0.88594
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.7828
+    },
+    {
+      "attack_seconds": 0.06788,
+      "event_id": "event_0060",
+      "event_type": "guitar_pluck",
+      "midi_note": 60,
+      "offset_seconds": 2.929362,
+      "onset_seconds": 2.0,
+      "release_seconds": 0.39431,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.161703,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 2,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -1.04754,
+          "filter_scale": 0.78722,
+          "transient_scale": 0.88763
+        }
+      },
+      "source_id": "source_010",
+      "velocity": 0.8923
+    },
+    {
+      "attack_seconds": 0.16714,
+      "event_id": "event_0012",
+      "event_type": "synth_pluck",
+      "midi_note": 65,
+      "offset_seconds": 2.709297,
+      "onset_seconds": 2.133333,
+      "release_seconds": 0.2074,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.719954,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 6,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -0.51658,
+          "filter_scale": 1.04628,
+          "transient_scale": 0.93351
+        }
+      },
+      "source_id": "source_004",
+      "velocity": 0.7887
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0030",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 2.230725,
+      "onset_seconds": 2.133333,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 0.96183,
+          "highpass_scale": 0.87101
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.6725
+    },
+    {
+      "attack_seconds": 0.13006,
+      "event_id": "event_0001",
+      "event_type": "synth_lead",
+      "midi_note": 55,
+      "offset_seconds": 3.476319,
+      "onset_seconds": 2.4,
+      "release_seconds": 0.54027,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.345398,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 2,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -0.53178,
+          "filter_scale": 1.06457,
+          "transient_scale": 1.09268
+        }
+      },
+      "source_id": "source_000",
+      "velocity": 0.8706
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0031",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 2.497392,
+      "onset_seconds": 2.4,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 1.01544,
+          "highpass_scale": 0.85383
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.8154
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0051",
+      "event_type": "snare",
+      "midi_note": null,
+      "offset_seconds": 2.68,
+      "onset_seconds": 2.4,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.35,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 4,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "body_tone_scale": 1.00368,
+          "noise_tone_scale": 1.04057
+        }
+      },
+      "source_id": "source_007",
+      "velocity": 0.9206
+    },
+    {
+      "attack_seconds": 0.02102,
+      "event_id": "event_0057",
+      "event_type": "pad_chord",
+      "midi_note": 53,
+      "offset_seconds": 4.62412,
+      "onset_seconds": 2.4,
+      "release_seconds": 0.6031,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 2.78015,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 1,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -0.72735,
+          "filter_scale": 0.92339,
+          "transient_scale": 0.94622
+        }
+      },
+      "source_id": "source_009",
+      "velocity": 0.7082
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0032",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 2.764059,
+      "onset_seconds": 2.666667,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 0.91911,
+          "highpass_scale": 0.87973
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.8759
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0033",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 3.030725,
+      "onset_seconds": 2.933333,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 1.0203,
+          "highpass_scale": 1.07874
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.8166
+    },
+    {
+      "attack_seconds": 0.06614,
+      "event_id": "event_0064",
+      "event_type": "piano",
+      "midi_note": 53,
+      "offset_seconds": 4.016642,
+      "onset_seconds": 3.0,
+      "release_seconds": 0.49563,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.270803,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 4,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -1.36932,
+          "filter_scale": 1.06608,
+          "transient_scale": 1.02055
+        }
+      },
+      "source_id": "source_011",
+      "velocity": 0.7097
+    },
+    {
+      "attack_seconds": 0.16714,
+      "event_id": "event_0013",
+      "event_type": "synth_pluck",
+      "midi_note": 52,
+      "offset_seconds": 3.64263,
+      "onset_seconds": 3.066667,
+      "release_seconds": 0.2074,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.719954,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 6,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -1.24199,
+          "filter_scale": 1.11648,
+          "transient_scale": 0.96131
+        }
+      },
+      "source_id": "source_004",
+      "velocity": 0.6926
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0034",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 3.297392,
+      "onset_seconds": 3.2,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 0.99477,
+          "highpass_scale": 0.95693
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.9051
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0035",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 3.564059,
+      "onset_seconds": 3.466667,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 1.03682,
+          "highpass_scale": 0.98411
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.7423
+    },
+    {
+      "attack_seconds": 0.16138,
+      "event_id": "event_0020",
+      "event_type": "piano",
+      "midi_note": 57,
+      "offset_seconds": 4.984457,
+      "onset_seconds": 3.6,
+      "release_seconds": 0.10916,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.730572,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 2,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 0.93741,
+          "filter_scale": 0.866,
+          "transient_scale": 1.11731
+        }
+      },
+      "source_id": "source_005",
+      "velocity": 0.6714
+    },
+    {
+      "attack_seconds": 0.13006,
+      "event_id": "event_0002",
+      "event_type": "synth_lead",
+      "midi_note": 50,
+      "offset_seconds": 5.076319,
+      "onset_seconds": 4.0,
+      "release_seconds": 0.54027,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.345398,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 2,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -0.49992,
+          "filter_scale": 0.94948,
+          "transient_scale": 1.13309
+        }
+      },
+      "source_id": "source_000",
+      "velocity": 0.6418
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0009",
+      "event_type": "kick",
+      "midi_note": null,
+      "offset_seconds": 4.34,
+      "onset_seconds": 4.0,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.425,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 2,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 1.07097,
+          "pitch_scale": 0.97844
+        }
+      },
+      "source_id": "source_003",
+      "velocity": 0.7743
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0036",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 4.097392,
+      "onset_seconds": 4.0,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 1.07262,
+          "highpass_scale": 1.11163
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.9237
+    },
+    {
+      "attack_seconds": 0.16714,
+      "event_id": "event_0014",
+      "event_type": "synth_pluck",
+      "midi_note": 67,
+      "offset_seconds": 4.84263,
+      "onset_seconds": 4.266667,
+      "release_seconds": 0.2074,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.719954,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 6,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 1.44669,
+          "filter_scale": 0.87485,
+          "transient_scale": 1.01622
+        }
+      },
+      "source_id": "source_004",
+      "velocity": 0.897
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0037",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 4.364059,
+      "onset_seconds": 4.266667,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 0.9429,
+          "highpass_scale": 0.99002
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.8262
+    },
+    {
+      "attack_seconds": 0.06614,
+      "event_id": "event_0065",
+      "event_type": "piano",
+      "midi_note": 50,
+      "offset_seconds": 5.416643,
+      "onset_seconds": 4.4,
+      "release_seconds": 0.49563,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.270803,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 4,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 1.14736,
+          "filter_scale": 1.19166,
+          "transient_scale": 0.91279
+        }
+      },
+      "source_id": "source_011",
+      "velocity": 0.8554
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0038",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 4.630726,
+      "onset_seconds": 4.533334,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 0.97376,
+          "highpass_scale": 1.03822
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.6797
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0039",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 4.897392,
+      "onset_seconds": 4.8,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 1.03501,
+          "highpass_scale": 1.09096
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.834
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0052",
+      "event_type": "snare",
+      "midi_note": null,
+      "offset_seconds": 5.08,
+      "onset_seconds": 4.8,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.35,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 4,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "body_tone_scale": 0.99278,
+          "noise_tone_scale": 0.94743
+        }
+      },
+      "source_id": "source_007",
+      "velocity": 0.7705
+    },
+    {
+      "attack_seconds": 0.14792,
+      "event_id": "event_0055",
+      "event_type": "string_stab",
+      "midi_note": 55,
+      "offset_seconds": 7.68163,
+      "onset_seconds": 4.8,
+      "release_seconds": 0.33371,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 3.602038,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 1,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 1.65154,
+          "filter_scale": 1.02267,
+          "transient_scale": 1.08498
+        }
+      },
+      "source_id": "source_008",
+      "velocity": 0.7148
+    },
+    {
+      "attack_seconds": 0.02102,
+      "event_id": "event_0058",
+      "event_type": "pad_chord",
+      "midi_note": 69,
+      "offset_seconds": 7.02412,
+      "onset_seconds": 4.8,
+      "release_seconds": 0.6031,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 2.78015,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 1,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 1.31984,
+          "filter_scale": 0.99395,
+          "transient_scale": 1.07638
+        }
+      },
+      "source_id": "source_009",
+      "velocity": 0.9664
+    },
+    {
+      "attack_seconds": 0.06788,
+      "event_id": "event_0061",
+      "event_type": "guitar_pluck",
+      "midi_note": 57,
+      "offset_seconds": 5.729362,
+      "onset_seconds": 4.8,
+      "release_seconds": 0.39431,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.161703,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 2,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 0.5947,
+          "filter_scale": 0.90028,
+          "transient_scale": 1.03635
+        }
+      },
+      "source_id": "source_010",
+      "velocity": 0.871
+    },
+    {
+      "attack_seconds": 0.16714,
+      "event_id": "event_0015",
+      "event_type": "synth_pluck",
+      "midi_note": 72,
+      "offset_seconds": 5.509297,
+      "onset_seconds": 4.933333,
+      "release_seconds": 0.2074,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.719954,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 6,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 1.32705,
+          "filter_scale": 0.95342,
+          "transient_scale": 0.98042
+        }
+      },
+      "source_id": "source_004",
+      "velocity": 0.8633
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0040",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 5.164059,
+      "onset_seconds": 5.066667,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 1.12392,
+          "highpass_scale": 0.98871
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.681
+    },
+    {
+      "attack_seconds": 0.13006,
+      "event_id": "event_0003",
+      "event_type": "synth_lead",
+      "midi_note": 65,
+      "offset_seconds": 6.276319,
+      "onset_seconds": 5.2,
+      "release_seconds": 0.54027,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.345398,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 2,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 1.5786,
+          "filter_scale": 1.15121,
+          "transient_scale": 1.079
+        }
+      },
+      "source_id": "source_000",
+      "velocity": 0.8403
+    },
+    {
+      "attack_seconds": 0.16138,
+      "event_id": "event_0021",
+      "event_type": "piano",
+      "midi_note": 52,
+      "offset_seconds": 6.584458,
+      "onset_seconds": 5.2,
+      "release_seconds": 0.10916,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.730572,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 2,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 0.61335,
+          "filter_scale": 1.21755,
+          "transient_scale": 1.1319
+        }
+      },
+      "source_id": "source_005",
+      "velocity": 0.828
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0041",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 5.430725,
+      "onset_seconds": 5.333333,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 1.10487,
+          "highpass_scale": 0.92875
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.6377
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0042",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 5.697392,
+      "onset_seconds": 5.6,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 1.13125,
+          "highpass_scale": 1.15629
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.7803
+    },
+    {
+      "attack_seconds": 0.16714,
+      "event_id": "event_0016",
+      "event_type": "synth_pluck",
+      "midi_note": 67,
+      "offset_seconds": 6.309297,
+      "onset_seconds": 5.733334,
+      "release_seconds": 0.2074,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.719954,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 6,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -1.01119,
+          "filter_scale": 1.09316,
+          "transient_scale": 0.94737
+        }
+      },
+      "source_id": "source_004",
+      "velocity": 0.7317
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0043",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 5.964059,
+      "onset_seconds": 5.866667,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 1.13275,
+          "highpass_scale": 1.13086
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.6804
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0044",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 6.230726,
+      "onset_seconds": 6.133334,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 1.05922,
+          "highpass_scale": 1.09467
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.8746
+    },
+    {
+      "attack_seconds": 0.13006,
+      "event_id": "event_0004",
+      "event_type": "synth_lead",
+      "midi_note": 60,
+      "offset_seconds": 7.476319,
+      "onset_seconds": 6.4,
+      "release_seconds": 0.54027,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.345398,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 2,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -0.16221,
+          "filter_scale": 0.98484,
+          "transient_scale": 1.12357
+        }
+      },
+      "source_id": "source_000",
+      "velocity": 0.6577
+    },
+    {
+      "attack_seconds": 0.10071,
+      "event_id": "event_0008",
+      "event_type": "string_stab",
+      "midi_note": 53,
+      "offset_seconds": 8.0,
+      "onset_seconds": 6.4,
+      "release_seconds": 0.44598,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 2.0,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 1,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 0.48476,
+          "filter_scale": 0.9699,
+          "transient_scale": 1.00501
+        }
+      },
+      "source_id": "source_002",
+      "velocity": 0.762
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0053",
+      "event_type": "snare",
+      "midi_note": null,
+      "offset_seconds": 6.68,
+      "onset_seconds": 6.4,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.35,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 4,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "body_tone_scale": 1.02451,
+          "noise_tone_scale": 1.04147
+        }
+      },
+      "source_id": "source_007",
+      "velocity": 0.8471
+    },
+    {
+      "attack_seconds": 0.06788,
+      "event_id": "event_0062",
+      "event_type": "guitar_pluck",
+      "midi_note": 64,
+      "offset_seconds": 7.329362,
+      "onset_seconds": 6.4,
+      "release_seconds": 0.39431,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.161703,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 2,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 0.32928,
+          "filter_scale": 1.04573,
+          "transient_scale": 1.17001
+        }
+      },
+      "source_id": "source_010",
+      "velocity": 0.6639
+    },
+    {
+      "attack_seconds": 0.06614,
+      "event_id": "event_0066",
+      "event_type": "piano",
+      "midi_note": 52,
+      "offset_seconds": 7.416643,
+      "onset_seconds": 6.4,
+      "release_seconds": 0.49563,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 1.270803,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 4,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": -0.3549,
+          "filter_scale": 1.00525,
+          "transient_scale": 1.10546
+        }
+      },
+      "source_id": "source_011",
+      "velocity": 0.6724
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0045",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 6.497393,
+      "onset_seconds": 6.400001,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 1.0189,
+          "highpass_scale": 1.06594
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.838
+    },
+    {
+      "attack_seconds": 0.16714,
+      "event_id": "event_0017",
+      "event_type": "synth_pluck",
+      "midi_note": 70,
+      "offset_seconds": 7.109297,
+      "onset_seconds": 6.533334,
+      "release_seconds": 0.2074,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.719954,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 6,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 1.92347,
+          "filter_scale": 1.0881,
+          "transient_scale": 1.14962
+        }
+      },
+      "source_id": "source_004",
+      "velocity": 0.8643
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0046",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 7.030726,
+      "onset_seconds": 6.933334,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 1.09947,
+          "highpass_scale": 1.08258
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.898
+    },
+    {
+      "attack_seconds": 0.16714,
+      "event_id": "event_0018",
+      "event_type": "synth_pluck",
+      "midi_note": 72,
+      "offset_seconds": 7.775964,
+      "onset_seconds": 7.2,
+      "release_seconds": 0.2074,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.719954,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 6,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 1.42288,
+          "filter_scale": 1.23689,
+          "transient_scale": 1.18808
+        }
+      },
+      "source_id": "source_004",
+      "velocity": 0.6621
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0047",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 7.297392,
+      "onset_seconds": 7.2,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 0.98718,
+          "highpass_scale": 1.10649
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.6778
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0048",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 7.564059,
+      "onset_seconds": 7.466667,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 0.99366,
+          "highpass_scale": 1.13831
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.7229
+    },
+    {
+      "attack_seconds": 0.13006,
+      "event_id": "event_0005",
+      "event_type": "synth_lead",
+      "midi_note": 55,
+      "offset_seconds": 8.0,
+      "onset_seconds": 7.6,
+      "release_seconds": 0.26994,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.5,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 2,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 0.68001,
+          "filter_scale": 1.189,
+          "transient_scale": 1.11869
+        }
+      },
+      "source_id": "source_000",
+      "velocity": 0.9574
+    },
+    {
+      "attack_seconds": 0.16138,
+      "event_id": "event_0022",
+      "event_type": "piano",
+      "midi_note": 52,
+      "offset_seconds": 8.0,
+      "onset_seconds": 7.6,
+      "release_seconds": 0.10916,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.5,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 2,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 1.9518,
+          "filter_scale": 1.21923,
+          "transient_scale": 1.01843
+        }
+      },
+      "source_id": "source_005",
+      "velocity": 0.9677
+    },
+    {
+      "attack_seconds": 0.06614,
+      "event_id": "event_0067",
+      "event_type": "piano",
+      "midi_note": 65,
+      "offset_seconds": 8.0,
+      "onset_seconds": 7.6,
+      "release_seconds": 0.33386,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.5,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 4,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "detune_offset_cents": 2.58363,
+          "filter_scale": 1.25654,
+          "transient_scale": 1.21144
+        }
+      },
+      "source_id": "source_011",
+      "velocity": 0.9547
+    },
+    {
+      "attack_seconds": 0.0,
+      "event_id": "event_0049",
+      "event_type": "closed_hat",
+      "midi_note": null,
+      "offset_seconds": 7.830726,
+      "onset_seconds": 7.733334,
+      "release_seconds": 0.0,
+      "render_parameters": {
+        "beat_seconds": 0.8,
+        "beat_unit": 4,
+        "composition_profile": "surge_patches_v1",
+        "duration_beats": 0.12174,
+        "measure_seconds": 4.0,
+        "rhythm_subdivision": 3,
+        "rhythm_template": "triplet",
+        "timbre_variation": {
+          "decay_scale": 0.96069,
+          "highpass_scale": 1.1357
+        }
+      },
+      "source_id": "source_006",
+      "velocity": 0.7703
+    }
+  ],
+  "key": "D",
+  "paths": {
+    "metadata": "metadata/clip_0004.json",
+    "mix": "audio/clip_0004.wav",
+    "stems": "stems/clip_0004"
+  },
+  "sample_rate": 44100,
+  "scale": "minor",
+  "seed": 127,
+  "sources": [
+    {
+      "articulation": "held",
+      "asset_id": "surge_xt_thirdparty_bluelight_leads_lead_9",
+      "effect_parameters": {
+        "drive": 1.358,
+        "duck_amount": 0.377,
+        "duck_release_seconds": 0.2488
+      },
+      "family": "synth",
+      "gain_db": -10.005,
+      "instrument": "surge_xt",
+      "pan": 0.0,
+      "renderer": "surge_xt_fxp",
+      "source_id": "source_000",
+      "source_type": "synth_lead",
+      "stem_path": "stems/clip_0004/source_000.wav",
+      "synth_parameters": {
+        "asset_audio_sha256": null,
+        "asset_duration_seconds": null,
+        "asset_note_max": 96,
+        "asset_note_min": 36,
+        "asset_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "asset_root_key": 60,
+        "asset_velocity_max": 1.0,
+        "asset_velocity_min": 0.0,
+        "detune_cents": 6.892394995971891,
+        "filter_hz": 10735.638783004326,
+        "octave_mix": 0.32677837747389826,
+        "plugin_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "preset_path": "C:\\ProgramData\\Surge XT\\patches_3rdparty\\Bluelight\\Leads\\Lead 9.fxp",
+        "procedural_recipe": "pluck_stab",
+        "saw_mix": 0.6051711978289747,
+        "surge_amp_attack_seconds": 0.13006,
+        "surge_amp_release_seconds": 0.54027,
+        "timbre_variant": "balanced",
+        "transient_click": 0.4931784262417297,
+        "variant_count": 1,
+        "variant_index": 0,
+        "variant_position": 0.5,
+        "voice_model": "round"
+      }
+    },
+    {
+      "articulation": "held",
+      "asset_id": "surge_xt_thirdparty_malfunction_strings_chamber_strings",
+      "effect_parameters": {
+        "drive": 1.2197,
+        "duck_amount": 0.5039,
+        "duck_release_seconds": 0.2469
+      },
+      "family": "synth",
+      "gain_db": -9.939,
+      "instrument": "surge_xt",
+      "pan": 0.0,
+      "renderer": "surge_xt_fxp",
+      "source_id": "source_001",
+      "source_type": "string_stab",
+      "stem_path": "stems/clip_0004/source_001.wav",
+      "synth_parameters": {
+        "asset_audio_sha256": null,
+        "asset_duration_seconds": null,
+        "asset_note_max": 96,
+        "asset_note_min": 36,
+        "asset_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "asset_root_key": 60,
+        "asset_velocity_max": 1.0,
+        "asset_velocity_min": 0.0,
+        "detune_cents": 4.766154375007353,
+        "filter_hz": 6083.463229145135,
+        "octave_mix": 0.43458347746545334,
+        "plugin_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "preset_path": "C:\\ProgramData\\Surge XT\\patches_3rdparty\\Malfunction\\Strings\\Chamber Strings.fxp",
+        "procedural_recipe": "pluck_stab",
+        "saw_mix": 0.31236758792220587,
+        "surge_amp_attack_seconds": 0.08651,
+        "surge_amp_release_seconds": 0.63367,
+        "timbre_variant": "dark",
+        "transient_click": 0.3013059683151053,
+        "variant_count": 3,
+        "variant_index": 0,
+        "variant_position": 0.0,
+        "voice_model": "round"
+      }
+    },
+    {
+      "articulation": "held",
+      "asset_id": "surge_xt_thirdparty_malfunction_strings_solo_cello",
+      "effect_parameters": {
+        "drive": 1.6906,
+        "duck_amount": 0.1982,
+        "duck_release_seconds": 0.2245
+      },
+      "family": "synth",
+      "gain_db": -9.542,
+      "instrument": "surge_xt",
+      "pan": 0.0,
+      "renderer": "surge_xt_fxp",
+      "source_id": "source_002",
+      "source_type": "string_stab",
+      "stem_path": "stems/clip_0004/source_002.wav",
+      "synth_parameters": {
+        "asset_audio_sha256": null,
+        "asset_duration_seconds": null,
+        "asset_note_max": 96,
+        "asset_note_min": 36,
+        "asset_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "asset_root_key": 60,
+        "asset_velocity_max": 1.0,
+        "asset_velocity_min": 0.0,
+        "detune_cents": 14.511976110744044,
+        "filter_hz": 9276.04367462936,
+        "octave_mix": 0.35304418008264105,
+        "plugin_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "preset_path": "C:\\ProgramData\\Surge XT\\patches_3rdparty\\Malfunction\\Strings\\Solo Cello.fxp",
+        "procedural_recipe": "pluck_stab",
+        "saw_mix": 0.5278523294585321,
+        "surge_amp_attack_seconds": 0.10071,
+        "surge_amp_release_seconds": 0.44598,
+        "timbre_variant": "balanced",
+        "transient_click": 0.42946694686324416,
+        "variant_count": 3,
+        "variant_index": 1,
+        "variant_position": 0.5,
+        "voice_model": "hollow"
+      }
+    },
+    {
+      "articulation": "hit",
+      "asset_id": "musicradar_essential_drumkit_kick_tr_808_kick_02_7505f101d2",
+      "effect_parameters": {
+        "drive": 2.0629,
+        "duck_amount": 0.0,
+        "duck_release_seconds": 0.222
+      },
+      "family": "drums",
+      "gain_db": -4.849,
+      "instrument": "musicradar_essential_drumkit_kick",
+      "pan": 0.0,
+      "renderer": "wav_one_shot",
+      "source_id": "source_003",
+      "source_type": "kick",
+      "stem_path": "stems/clip_0004/source_003.wav",
+      "synth_parameters": {
+        "asset_audio_sha256": "7505f101d255aaf49be7e28c3f629ff9826431f8c693f32c3ceba99f11eee273",
+        "asset_duration_seconds": 0.323741,
+        "asset_note_max": null,
+        "asset_note_min": null,
+        "asset_path": "C:\\dev\\comet\\assets\\library\\samples\\percussion\\musicradar_essential_drumkit\\musicradar_essential_drumkit_kick_tr_808_kick_02_7505f101d2.wav",
+        "asset_root_key": null,
+        "asset_velocity_max": 1.0,
+        "asset_velocity_min": 0.0,
+        "end_hz": 46.81867117500567,
+        "plugin_path": "C:\\dev\\comet\\assets\\library\\samples\\percussion\\musicradar_essential_drumkit\\musicradar_essential_drumkit_kick_tr_808_kick_02_7505f101d2.wav",
+        "preset_path": null,
+        "procedural_recipe": "kick",
+        "start_hz": 116.75135464945605,
+        "surge_amp_attack_seconds": 0.04068,
+        "surge_amp_release_seconds": 0.50111,
+        "timbre_variant": "balanced",
+        "variant_count": 1,
+        "variant_index": 0,
+        "variant_position": 0.5
+      }
+    },
+    {
+      "articulation": "held",
+      "asset_id": "surge_xt_thirdparty_nick_moritz_keys_dream_plucks",
+      "effect_parameters": {
+        "drive": 1.5563,
+        "duck_amount": 0.304,
+        "duck_release_seconds": 0.2677
+      },
+      "family": "synth",
+      "gain_db": -9.856,
+      "instrument": "surge_xt",
+      "pan": 0.0,
+      "renderer": "surge_xt_fxp",
+      "source_id": "source_004",
+      "source_type": "synth_pluck",
+      "stem_path": "stems/clip_0004/source_004.wav",
+      "synth_parameters": {
+        "asset_audio_sha256": null,
+        "asset_duration_seconds": null,
+        "asset_note_max": 96,
+        "asset_note_min": 36,
+        "asset_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "asset_root_key": 60,
+        "asset_velocity_max": 1.0,
+        "asset_velocity_min": 0.0,
+        "detune_cents": 6.046148840815898,
+        "filter_hz": 7247.093444788768,
+        "octave_mix": 0.33870265623920326,
+        "plugin_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "preset_path": "C:\\ProgramData\\Surge XT\\patches_3rdparty\\Nick Moritz\\Keys\\Dream Plucks.fxp",
+        "procedural_recipe": "pluck_stab",
+        "saw_mix": 0.4039858770623612,
+        "surge_amp_attack_seconds": 0.16714,
+        "surge_amp_release_seconds": 0.2074,
+        "timbre_variant": "balanced",
+        "transient_click": 0.4420061192059219,
+        "variant_count": 1,
+        "variant_index": 0,
+        "variant_position": 0.5,
+        "voice_model": "round"
+      }
+    },
+    {
+      "articulation": "held",
+      "asset_id": "surge_xt_factory_keys_church",
+      "effect_parameters": {
+        "drive": 1.237,
+        "duck_amount": 0.3423,
+        "duck_release_seconds": 0.3172
+      },
+      "family": "synth",
+      "gain_db": -10.179,
+      "instrument": "surge_xt",
+      "pan": 0.0,
+      "renderer": "surge_xt_fxp",
+      "source_id": "source_005",
+      "source_type": "piano",
+      "stem_path": "stems/clip_0004/source_005.wav",
+      "synth_parameters": {
+        "asset_audio_sha256": null,
+        "asset_duration_seconds": null,
+        "asset_note_max": 96,
+        "asset_note_min": 36,
+        "asset_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "asset_root_key": 60,
+        "asset_velocity_max": 1.0,
+        "asset_velocity_min": 0.0,
+        "detune_cents": 4.490150175271989,
+        "filter_hz": 5482.937442735241,
+        "octave_mix": 0.5921658482847716,
+        "plugin_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "preset_path": "C:\\ProgramData\\Surge XT\\patches_factory\\Keys\\Church.fxp",
+        "procedural_recipe": "pluck_stab",
+        "saw_mix": 0.2641632915541631,
+        "surge_amp_attack_seconds": 0.16138,
+        "surge_amp_release_seconds": 0.10916,
+        "timbre_variant": "dark",
+        "transient_click": 0.1804715385791874,
+        "variant_count": 2,
+        "variant_index": 0,
+        "variant_position": 0.0,
+        "voice_model": "round"
+      }
+    },
+    {
+      "articulation": "hit",
+      "asset_id": "musicradar_modular_percussion_closed_hat_ms20_closedhat_11_09ba0f461a",
+      "effect_parameters": {
+        "drive": 1.6945,
+        "duck_amount": 0.4341,
+        "duck_release_seconds": 0.219
+      },
+      "family": "drums",
+      "gain_db": -11.299,
+      "instrument": "musicradar_modular_percussion_closed_hat",
+      "pan": 0.0,
+      "renderer": "wav_one_shot",
+      "source_id": "source_006",
+      "source_type": "closed_hat",
+      "stem_path": "stems/clip_0004/source_006.wav",
+      "synth_parameters": {
+        "asset_audio_sha256": "09ba0f461a43b26fc92d9b19bcc5fabca48d900073e541868a251a299776c470",
+        "asset_duration_seconds": 0.097392,
+        "asset_note_max": null,
+        "asset_note_min": null,
+        "asset_path": "C:\\dev\\comet\\assets\\library\\samples\\percussion\\musicradar_modular_percussion\\musicradar_modular_percussion_closed_hat_ms20_closedhat_11_09ba0f461a.wav",
+        "asset_root_key": null,
+        "asset_velocity_max": 1.0,
+        "asset_velocity_min": 0.0,
+        "highpass_hz": 7411.547864562327,
+        "plugin_path": "C:\\dev\\comet\\assets\\library\\samples\\percussion\\musicradar_modular_percussion\\musicradar_modular_percussion_closed_hat_ms20_closedhat_11_09ba0f461a.wav",
+        "preset_path": null,
+        "procedural_recipe": "hat_noise",
+        "surge_amp_attack_seconds": 0.04945,
+        "surge_amp_release_seconds": 0.53587,
+        "timbre_variant": "balanced",
+        "variant_count": 1,
+        "variant_index": 0,
+        "variant_position": 0.5
+      }
+    },
+    {
+      "articulation": "hit",
+      "asset_id": "musicradar_essential_drumkit_snare_80s_digital_tamb_784f4ce4fa",
+      "effect_parameters": {
+        "drive": 1.3663,
+        "duck_amount": 0.2694,
+        "duck_release_seconds": 0.1741
+      },
+      "family": "drums",
+      "gain_db": -7.937,
+      "instrument": "musicradar_essential_drumkit_snare",
+      "pan": 0.0,
+      "renderer": "wav_one_shot",
+      "source_id": "source_007",
+      "source_type": "snare",
+      "stem_path": "stems/clip_0004/source_007.wav",
+      "synth_parameters": {
+        "asset_audio_sha256": "784f4ce4fa256a91b59c1696199c0cb680cb11d0ad4c8647e9366e980bd62603",
+        "asset_duration_seconds": 0.179025,
+        "asset_note_max": null,
+        "asset_note_min": null,
+        "asset_path": "C:\\dev\\comet\\assets\\library\\samples\\percussion\\musicradar_essential_drumkit\\musicradar_essential_drumkit_snare_80s_digital_tamb_784f4ce4fa.wav",
+        "asset_root_key": null,
+        "asset_velocity_max": 1.0,
+        "asset_velocity_min": 0.0,
+        "body_hz": 229.489383202683,
+        "noise_tone_hz": 3292.0177079415344,
+        "plugin_path": "C:\\dev\\comet\\assets\\library\\samples\\percussion\\musicradar_essential_drumkit\\musicradar_essential_drumkit_snare_80s_digital_tamb_784f4ce4fa.wav",
+        "preset_path": null,
+        "procedural_recipe": "snare_clap",
+        "surge_amp_attack_seconds": 0.05687,
+        "surge_amp_release_seconds": 0.1197,
+        "timbre_variant": "balanced",
+        "variant_count": 1,
+        "variant_index": 0,
+        "variant_position": 0.5
+      }
+    },
+    {
+      "articulation": "held",
+      "asset_id": "surge_xt_thirdparty_nick_moritz_strings_orchestral_trombone",
+      "effect_parameters": {
+        "drive": 2.3098,
+        "duck_amount": 0.3361,
+        "duck_release_seconds": 0.2241
+      },
+      "family": "synth",
+      "gain_db": -10.456,
+      "instrument": "surge_xt",
+      "pan": 0.0,
+      "renderer": "surge_xt_fxp",
+      "source_id": "source_008",
+      "source_type": "string_stab",
+      "stem_path": "stems/clip_0004/source_008.wav",
+      "synth_parameters": {
+        "asset_audio_sha256": null,
+        "asset_duration_seconds": null,
+        "asset_note_max": 96,
+        "asset_note_min": 36,
+        "asset_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "asset_root_key": 60,
+        "asset_velocity_max": 1.0,
+        "asset_velocity_min": 0.0,
+        "detune_cents": 20.92403230856136,
+        "filter_hz": 15430.534205460885,
+        "octave_mix": 0.4725035870234834,
+        "plugin_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "preset_path": "C:\\ProgramData\\Surge XT\\patches_3rdparty\\Nick Moritz\\Strings\\Orchestral Trombone.fxp",
+        "procedural_recipe": "pluck_stab",
+        "saw_mix": 0.7486401595473531,
+        "surge_amp_attack_seconds": 0.14792,
+        "surge_amp_release_seconds": 0.33371,
+        "timbre_variant": "bright",
+        "transient_click": 0.6718010499024247,
+        "variant_count": 3,
+        "variant_index": 2,
+        "variant_position": 1.0,
+        "voice_model": "bright_saw"
+      }
+    },
+    {
+      "articulation": "held",
+      "asset_id": "surge_xt_thirdparty_emu_pads_fez_pad",
+      "effect_parameters": {
+        "drive": 2.1475,
+        "duck_amount": 0.4808,
+        "duck_release_seconds": 0.3056
+      },
+      "family": "synth",
+      "gain_db": -10.247,
+      "instrument": "surge_xt",
+      "pan": 0.0,
+      "renderer": "surge_xt_fxp",
+      "source_id": "source_009",
+      "source_type": "pad_chord",
+      "stem_path": "stems/clip_0004/source_009.wav",
+      "synth_parameters": {
+        "asset_audio_sha256": null,
+        "asset_duration_seconds": null,
+        "asset_note_max": 96,
+        "asset_note_min": 36,
+        "asset_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "asset_root_key": 60,
+        "asset_velocity_max": 1.0,
+        "asset_velocity_min": 0.0,
+        "detune_cents": 8.330701750916116,
+        "filter_hz": 9966.838946307564,
+        "octave_mix": 0.5555584131389144,
+        "plugin_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "preset_path": "C:\\ProgramData\\Surge XT\\patches_3rdparty\\Emu\\Pads\\Fez Pad.fxp",
+        "procedural_recipe": "pluck_stab",
+        "saw_mix": 0.5174090957323343,
+        "surge_amp_attack_seconds": 0.02102,
+        "surge_amp_release_seconds": 0.6031,
+        "timbre_variant": "balanced",
+        "transient_click": 0.2794914165997737,
+        "variant_count": 1,
+        "variant_index": 0,
+        "variant_position": 0.5,
+        "voice_model": "round"
+      }
+    },
+    {
+      "articulation": "held",
+      "asset_id": "surge_xt_thirdparty_kinsey_dulcet_guitars_mutant_lo_fi_acoustic_guitar_workstation",
+      "effect_parameters": {
+        "drive": 1.6072,
+        "duck_amount": 0.4298,
+        "duck_release_seconds": 0.161
+      },
+      "family": "synth",
+      "gain_db": -10.022,
+      "instrument": "surge_xt",
+      "pan": 0.0,
+      "renderer": "surge_xt_fxp",
+      "source_id": "source_010",
+      "source_type": "guitar_pluck",
+      "stem_path": "stems/clip_0004/source_010.wav",
+      "synth_parameters": {
+        "asset_audio_sha256": null,
+        "asset_duration_seconds": null,
+        "asset_note_max": 96,
+        "asset_note_min": 36,
+        "asset_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "asset_root_key": 60,
+        "asset_velocity_max": 1.0,
+        "asset_velocity_min": 0.0,
+        "detune_cents": 7.697092585676901,
+        "filter_hz": 10274.122573750552,
+        "octave_mix": 0.4752587274238452,
+        "plugin_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "preset_path": "C:\\ProgramData\\Surge XT\\patches_3rdparty\\Kinsey Dulcet\\Guitars\\Mutant Lo-Fi Acoustic Guitar Workstation.fxp",
+        "procedural_recipe": "pluck_stab",
+        "saw_mix": 0.33014632149717216,
+        "surge_amp_attack_seconds": 0.06788,
+        "surge_amp_release_seconds": 0.39431,
+        "timbre_variant": "balanced",
+        "transient_click": 0.2507869767640205,
+        "variant_count": 1,
+        "variant_index": 0,
+        "variant_position": 0.5,
+        "voice_model": "round"
+      }
+    },
+    {
+      "articulation": "held",
+      "asset_id": "surge_xt_thirdparty_inigo_kennedy_keys_winter_3",
+      "effect_parameters": {
+        "drive": 2.4416,
+        "duck_amount": 0.2281,
+        "duck_release_seconds": 0.2129
+      },
+      "family": "synth",
+      "gain_db": -9.991,
+      "instrument": "surge_xt",
+      "pan": 0.0,
+      "renderer": "surge_xt_fxp",
+      "source_id": "source_011",
+      "source_type": "piano",
+      "stem_path": "stems/clip_0004/source_011.wav",
+      "synth_parameters": {
+        "asset_audio_sha256": null,
+        "asset_duration_seconds": null,
+        "asset_note_max": 96,
+        "asset_note_min": 36,
+        "asset_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "asset_root_key": 60,
+        "asset_velocity_max": 1.0,
+        "asset_velocity_min": 0.0,
+        "detune_cents": 13.727055075596768,
+        "filter_hz": 14626.749377190437,
+        "octave_mix": 0.40377044988706595,
+        "plugin_path": "C:\\Program Files\\Common Files\\VST2\\Surge.dll",
+        "preset_path": "C:\\ProgramData\\Surge XT\\patches_3rdparty\\Inigo Kennedy\\Keys\\Winter 3.fxp",
+        "procedural_recipe": "pluck_stab",
+        "saw_mix": 0.4722291276006061,
+        "surge_amp_attack_seconds": 0.06614,
+        "surge_amp_release_seconds": 0.49563,
+        "timbre_variant": "bright",
+        "transient_click": 0.3847538975093574,
+        "variant_count": 2,
+        "variant_index": 1,
+        "variant_position": 1.0,
+        "voice_model": "hollow"
+      }
+    }
+  ],
+  "time_signature": "5/4"
+}
